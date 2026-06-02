@@ -3,11 +3,8 @@ import pandas as pd
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
-def fetch_market_data(tickers: list, lookback_years: int) -> pd.DataFrame:
-    '''
-    Fetches daily market data
-    Times are standardized to EST
-    '''
+def fetch_ticker_data(tickers: list, lookback_years: int) -> pd.DataFrame:
+    # Fetches daily market data times. are standardized to EST
 
     print("Fetching {lookback_years} years of data for: {tickers}")
 
@@ -15,7 +12,7 @@ def fetch_market_data(tickers: list, lookback_years: int) -> pd.DataFrame:
     market_timezone = ZoneInfo("America/New York")
     ny_today = datetime.now(market_timezone)
 
-    # Reformat
+    # Calculate lookback window
     end_date = ny_today.strftime('%Y-%m-%d')
     start_date = (ny_today - timedelta(days = lookback_years * 365)).strftime('%Y-%m-%d')
 
@@ -26,11 +23,12 @@ def fetch_market_data(tickers: list, lookback_years: int) -> pd.DataFrame:
             raw_yf_df = yf.download(symbol, start=start_date, end=end_date, progress = False)
 
             if raw_yf_df.empty:
-                printf(f"No data returned for {symbol}")
+                print(f"No data returned for {symbol}")
                 continue
             
-            raw_yf_df = raw_yf.df.reset_index()
+            raw_yf_df = raw_yf_df.reset_index()
 
+            # Reformat
             formatted_df = pd.DataFrame({
                 'date': pd.to_datetime(raw_yf_df['Date']).dt.date,
                 'ticker': symbol,
