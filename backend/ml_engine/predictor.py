@@ -12,10 +12,14 @@ These take in:
 import pandas as pd
 import numpy as np
 import joblib
+from pathlib import Path
+
+SAVED_MODEL_DIR = Path(__file__).resolve().parent / "saved_models"
 
 # Load trained model binaries from disk
-return_model = joblib.load('ml_engine/saved_models/gbr_return_model.pkl')
-volatility_model = joblib.load('ml_engine/saved_models/rfr_volatility_model.pkl')
+# NOTE: for app deployment, train multiple instances to predict different timelines
+return_model = joblib.load(SAVED_MODEL_DIR / 'gbr_return_model.pkl')
+volatility_model = joblib.load(SAVED_MODEL_DIR / 'rfr_volatility_model.pkl')
 
 # Makes an inference on future returns over given timeline
 def return_inference(timeline: int, df: pd.DataFrame, kalman_filter = True) -> np.ndarray:
@@ -41,7 +45,7 @@ def volatility_inference(timeline: int, df: pd.DataFrame, kalman_filter = True) 
     if kalman_filter:
         live_df['price_trend_deviation'] = live_df['adjusted_close'] - live_df['kalman_smoothed_price']
     else:
-        live_df['price_trend_deviation'] = live_df['adjusted_close'] - live_df['adjusted_close'].rolling(window=timeline, min_periods=1).mean()
+        live_df['price_trend_deviation'] = live_df['adjusted_close'] - live_df['adjusted_close'].rolling(window = timeline, min_periods = 1).mean()
         
     X = live_df[['price_trend_deviation', 'rolling_volatility', 'gemini_sentiment_score', 'gemini_risk_flag']]
     
