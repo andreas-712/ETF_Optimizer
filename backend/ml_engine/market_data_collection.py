@@ -1,16 +1,20 @@
+# Collects market data for tickers
+
 import yfinance as yf
 import pandas as pd
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 
+# Standardizes yf data to a series column
 def _as_series(column_data):
     if isinstance(column_data, pd.DataFrame):
         return column_data.iloc[:, 0]
     return column_data
 
+
 def fetch_ticker_data(tickers: list, lookback_years: int) -> pd.DataFrame:
-    # Fetches daily market data times. are standardized to EST
+    # Fetches daily market data times. Standardized to EST
     print(f"Fetching {lookback_years} years of data for: {tickers}")
 
     # Use NY time
@@ -23,6 +27,7 @@ def fetch_ticker_data(tickers: list, lookback_years: int) -> pd.DataFrame:
 
     compiled_records = []
 
+    # Download market data for given ticker
     for symbol in tickers:
         try:
             raw_yf_df = yf.download(
@@ -39,9 +44,10 @@ def fetch_ticker_data(tickers: list, lookback_years: int) -> pd.DataFrame:
             
             raw_yf_df = raw_yf_df.reset_index()
 
-            # Reformat
+            # Add in adjusted close column
             adjusted_close_column = "Adj Close" if "Adj Close" in raw_yf_df.columns else "Close"
 
+            # Reformat
             formatted_df = pd.DataFrame({
                 'date': pd.to_datetime(_as_series(raw_yf_df['Date'])).dt.date,
                 'ticker': symbol,
@@ -49,6 +55,7 @@ def fetch_ticker_data(tickers: list, lookback_years: int) -> pd.DataFrame:
                 'volume': _as_series(raw_yf_df['Volume']).astype(int)
             })
 
+            # Append ticker with data to df
             compiled_records.append(formatted_df)
             print(f"Successfully fetched {len(formatted_df)} rows for {symbol}")
 

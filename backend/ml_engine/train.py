@@ -1,3 +1,5 @@
+# Exposes functions for training ML model on existing data
+
 import pandas as pd
 import joblib
 from pathlib import Path
@@ -29,7 +31,7 @@ def add_gemini_inputs(df: pd.DataFrame, ratings: dict) -> pd.DataFrame:
 def build_training_frame(
     df: pd.DataFrame,
     horizon_days: int,
-    gemini_ratings: dict,
+    gemini_data: dict,
     feature_columns: list[str],
     rolling_volatility_window: int = 10,
     kalman_q: float = 1e-5,
@@ -38,7 +40,7 @@ def build_training_frame(
     # Populate df with relevant data, process with Kalman filter, add Gemini inference
     result = df.sort_values(["ticker", "date"]).copy()
     result = Kalman_Filter(Q=kalman_q, R=kalman_r).smooth_dataframe(result)
-    result = add_gemini_inputs(result, gemini_ratings)
+    result = add_gemini_inputs(result, gemini_data)
 
     # Sort by ticker
     grouped = result.groupby("ticker", group_keys = False)
@@ -61,11 +63,11 @@ def build_training_frame(
         subset=feature_columns + ["future_return_outcome", "future_volatility_outcome"]
     )
 
-'''
+"""
 Trains a sequential Gradient Boosting model
 Captures asset momentum/inflection signals based on 
 Kalman and Gemini features.
-'''
+"""
 def train_return_predictor(
     df: pd.DataFrame,
     feature_columns: list[str],
@@ -87,12 +89,12 @@ def train_return_predictor(
 
     return return_model
 
-'''
+""""
 Trains a Random Forest Regression model
 Predicts market volatility / risk for specified assets
 based on Kalman and Gemini features.
-'''
-def train_risk_predictor(
+"""
+def train_volatility_predictor(
     df: pd.DataFrame,
     feature_columns: list[str],
     target_column: str,
@@ -101,7 +103,7 @@ def train_risk_predictor(
     X = df[feature_columns]
     y = df[target_column]
 
-    risk_model = RandomForestRegressor(
+    volatility_model = RandomForestRegressor(
         n_estimators = 200,      # Parallel trees: faster execution
         max_depth = 6,           # Less prone to overfitting: more depth
         min_samples_split = 5,   # Smooth isolated trend deviations
@@ -109,6 +111,6 @@ def train_risk_predictor(
         random_state = 10
     )
 
-    risk_model.fit(X, y)
+    volatility_model.fit(X, y)
 
-    return risk_model
+    return volatility_model

@@ -1,28 +1,24 @@
-'''
-This predictor module is responsible for determining:
-- Expected returns over time (Gradient Boosting)
-- Future volatility trends (Random Forest)
-These take in:
-    1. price_trend_deviation (float)
-    2. rolling_volatility (float)
-    3. gemini_sentiment_score (float)
-    4. gemini_risk_flag (0 - low, 1 - med, 2 - high)
-'''
+# Exposes helpers for ML model prediction data
 
 import pandas as pd
 import numpy as np
-import joblib
 from pathlib import Path
 
-SAVED_MODEL_DIR = Path(__file__).resolve().parent / "saved_models"
 
-# Load trained model binaries from disk
-# NOTE: for app deployment, train multiple instances to predict different timelines
-return_model = joblib.load(SAVED_MODEL_DIR / 'gbr_return_model.pkl')
-volatility_model = joblib.load(SAVED_MODEL_DIR / 'rfr_volatility_model.pkl')
+# Keep feature column names standardized across modules (source of truth)
+FEATURE_COLUMNS = [
+    "price_trend_deviation",
+    "rolling_volatility",
+    "gemini_sentiment_score",
+    "gemini_risk_flag",
+]
 
-# Makes an inference on future returns over given timeline
-def return_inference(timeline: int, df: pd.DataFrame, kalman_filter = True) -> np.ndarray:
+"""
+Processes feature columns for prediction-ready data
+Params: timeline in days, dataframe with features, Kalman Filter toggle
+Returns: Processed feature columns
+"""
+def build_inference_features(timeline: int, df: pd.DataFrame, kalman_filter = True) -> pd.DataFrame:
     live_df = df.copy()
     
     # 1. Kalman filter toggle
@@ -33,20 +29,4 @@ def return_inference(timeline: int, df: pd.DataFrame, kalman_filter = True) -> n
         live_df['price_trend_deviation'] = live_df['adjusted_close'] - live_df['adjusted_close'].rolling(window = timeline, min_periods = 1).mean()
         
     # 2. Extract feature columns the model needs
-    X = live_df[['price_trend_deviation', 'rolling_volatility', 'gemini_sentiment_score', 'gemini_risk_flag']]
-    
-    # 3. Run prediction
-    return return_model.predict(X)
-
-# Makes an inference on future volatility over given timeline
-def volatility_inference(timeline: int, df: pd.DataFrame, kalman_filter = True) -> np.ndarray:
-    live_df = df.copy()
-    
-    if kalman_filter:
-        live_df['price_trend_deviation'] = live_df['adjusted_close'] - live_df['kalman_smoothed_price']
-    else:
-        live_df['price_trend_deviation'] = live_df['adjusted_close'] - live_df['adjusted_close'].rolling(window = timeline, min_periods = 1).mean()
-        
-    X = live_df[['price_trend_deviation', 'rolling_volatility', 'gemini_sentiment_score', 'gemini_risk_flag']]
-    
-    return volatility_model.predict(X)
+    return live_df[['price_trend_deviation', 'rolling_volatility', 'gemini_sentiment_score', 'gemini_risk_flag']]

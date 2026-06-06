@@ -228,7 +228,7 @@ def train_models_for_horizon(market_df: pd.DataFrame, horizon_days: int) -> dict
     return_path = save_model(return_model, f"gbr_return_model_{horizon_days}d.pkl")
     risk_path = save_model(risk_model, f"rfr_volatility_model_{horizon_days}d.pkl")
 
-    # Prove the saved files can be loaded again.
+    # Prove the saved files can be loaded again
     loaded_return_model = joblib.load(return_path)
     loaded_risk_model = joblib.load(risk_path)
 
