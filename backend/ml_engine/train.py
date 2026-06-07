@@ -4,6 +4,7 @@ import pandas as pd
 import joblib
 from pathlib import Path
 from sklearn.ensemble import GradientBoostingRegressor, RandomForestRegressor
+import math
 
 from math_engine.Kalman_Filter import Kalman_Filter
 
@@ -17,21 +18,52 @@ def save_model(model, filename: str) -> Path:
     return output_path
 
 
-def add_gemini_inputs(df: pd.DataFrame, ratings: dict) -> pd.DataFrame:
-    result = df.copy()
-    result["gemini_sentiment_score"] = result["ticker"].map(
-        lambda ticker: ratings[ticker]["sentiment"]
+"""
+Builds the Gemini inference feature frame for overall market sentiment impact
+Sentiment score = relevance * polarity * urgency
+"""
+def build_gemini_feature_frame(gemini_df: pd.DataFrame) -> pd.DataFrame:
+    # 1. Checks for data integrity
+    required_columns = {"ticker", "relevance", "polarity", "urgency"}
+    missing_columns = required_columns - set(gemini_df.columns)
+    if missing_columns:
+        raise ValueError(f"Gemini data is missing columns: {sorted(missing_columns)}")
+
+    result = gemini_df.copy()
+
+    duplicate_tickers = result.loc[result["ticker"].duplicated(), "ticker"].unique()
+    if len(duplicate_tickers) > 0:
+        raise ValueError(f"Gemini data has duplicate tickers: {sorted(duplicate_tickers)}")
+
+    allowed_scores = {
+        "relevance": {0.5, 1.0, 1.5},
+        "polarity": {-1, 1},
+        "urgency": {1, 2, 3},
+    }
+    for column, allowed_values in allowed_scores.items():
+        invalid_values = result.loc[~result[column].isin(allowed_values), column].unique()
+        if len(invalid_values) > 0:
+            raise ValueError(
+                f"Gemini {column} has invalid values: {sorted(invalid_values)}"
+            )
+
+    # 2. Compute sentiment scores for tickers
+    result["gemini_sentiment_score"] = (
+        result["relevance"] * result["polarity"] * result["urgency"]
     )
-    result["gemini_risk_flag"] = result["ticker"].map(
-        lambda ticker: ratings[ticker]["risk"]
-    )
-    return result
+
+    return result[["ticker", "gemini_sentiment_score"]]
+
+
+def add_gemini_inputs(df: pd.DataFrame, gemini_df: pd.DataFrame) -> pd.DataFrame:
+    gemini_features = build_gemini_feature_frame(gemini_df)
+    return df.merge(gemini_features, on="ticker", how="left")
 
 
 def build_training_frame(
     df: pd.DataFrame,
     horizon_days: int,
-    gemini_data: dict,
+    gemini_data: pd.DataFrame,
     feature_columns: list[str],
     rolling_volatility_window: int = 10,
     kalman_q: float = 1e-5,
@@ -72,24 +104,34 @@ def train_return_predictor(
     df: pd.DataFrame,
     feature_columns: list[str],
     target_column: str,
+    timeline_days: int,
 ):
 
+    # Extract input and output columns
     X = df[feature_columns]
     y = df[target_column]
     
+    # Set model hyperparameters
     return_model = GradientBoostingRegressor(
-        n_estimators = 100,     # Sequential tree learning steps
-        learning_rate = 0.05,   # Step size down loss gradient
-        max_depth = 4,          # Capture interactive feature variables
+        n_estimators = 50,     # Sequential tree learning steps
+        learning_rate = 0.005,   # Step size down loss gradient
+        max_depth = 3,          # Capture interactive feature variables
         subsample = 0.85,       # Minimize variance (hide some data from predictors)
-        random_state = 10       # Reduce unecessary variables for tests 
+        random_state = 10
     )
 
-    return_model.fit(X, y)
+    # Build exponential decay (half life) weight array
+    # a is lower for return model compared to volatility model
+    a = math.log(2) / (timeline_days * 3)
+    dates = pd.to_datetime(df["date"])
+    age_days = (dates.max() - dates).dt.days
+    weights = [math.exp(-a * age) for age in age_days]
+    
+    return_model.fit(X, y, sample_weight = weights)
 
     return return_model
 
-""""
+"""
 Trains a Random Forest Regression model
 Predicts market volatility / risk for specified assets
 based on Kalman and Gemini features.
@@ -98,19 +140,26 @@ def train_volatility_predictor(
     df: pd.DataFrame,
     feature_columns: list[str],
     target_column: str,
+    timeline_days: int,
 ):
 
     X = df[feature_columns]
     y = df[target_column]
 
     volatility_model = RandomForestRegressor(
-        n_estimators = 200,      # Parallel trees: faster execution
-        max_depth = 6,           # Less prone to overfitting: more depth
-        min_samples_split = 5,   # Smooth isolated trend deviations
-        n_jobs = 1,              # Spread calculations across all cores
+        n_estimators = 200,      # Parallel trees: can push higher
+        max_depth = 6,           # Less prone to overfitting: push depth higher
+        min_samples_split = 5,   # Lower = more specific rules (potential overfitting)
+        n_jobs = -1,              # Spread calculations across available cores
         random_state = 10
     )
 
-    volatility_model.fit(X, y)
+    # Build exponential decay (half life) weight array
+    a = math.log(2) / timeline_days
+    dates = pd.to_datetime(df["date"])
+    age_days = (dates.max() - dates).dt.days
+    weights = [math.exp(-a * age) for age in age_days]
+
+    volatility_model.fit(X, y, sample_weight = weights)
 
     return volatility_model

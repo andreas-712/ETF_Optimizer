@@ -24,7 +24,7 @@ from ml_engine.train import (
     build_training_frame,
     save_model,
     train_return_predictor,
-    train_risk_predictor,
+    train_volatility_predictor,
 )
 
 
@@ -36,45 +36,33 @@ TEST_SIZE = 0.2
 ROLLING_VOLATILITY_WINDOW = 10
 KALMAN_Q = 1e-5
 KALMAN_R = 1e-2
-RATINGS_USED = "n"
-RISK_USED = "n"
+GEMINI_SCORING_USED = "relevance*polarity*urgency"
 RETURN_TARGET_TYPE = "pct_change_shifted"
 VOLATILITY_TARGET_TYPE = "rolling_std_shifted"
 FEATURE_COLUMNS = [
     "price_trend_deviation",
     "rolling_volatility",
     "gemini_sentiment_score",
-    "gemini_risk_flag",
 ]
 
 # Dummy sandbox values.
-# sentiment: -1.0 bearish, 0.0 neutral, 1.0 bullish
-# risk_flag: 0 low, 1 medium, 2 high
-DUMMY_RATINGS_1 = {
-    "AAPL": {"sentiment": 0.40, "risk": 0},
-    "MSFT": {"sentiment": 0.80, "risk": 0},
-    "GOOGL": {"sentiment": 0.70, "risk": 0},
-    "AMZN": {"sentiment": 0.70, "risk": 0},
-    "NVDA": {"sentiment": 0.30, "risk": 1},
-    "META": {"sentiment": 0.50, "risk": 1},
-    "JPM": {"sentiment": 0.60, "risk": 0},
-    "XOM": {"sentiment": -0.10, "risk": 1},
-    "UNH": {"sentiment": 0.70, "risk": 0},
-    "TSLA": {"sentiment": -0.20, "risk": 2},
-}
-
-DUMMY_RATINGS_2 = {
-    "AAPL": {"sentiment": 0.00, "risk": 1},
-    "MSFT": {"sentiment": 0.00, "risk": 1},
-    "GOOGL": {"sentiment": 0.00, "risk": 1},
-    "AMZN": {"sentiment": 0.00, "risk": 1},
-    "NVDA": {"sentiment": 0.00, "risk": 1},
-    "META": {"sentiment": 0.00, "risk": 1},
-    "JPM": {"sentiment": 0.00, "risk": 1},
-    "XOM": {"sentiment": 0.00, "risk": 1},
-    "UNH": {"sentiment": 0.00, "risk": 1},
-    "TSLA": {"sentiment": 0.00, "risk": 1},
-}
+# relevance: 0.5 low/tangential, 1.0 medium/direct, 1.5 high/front-page macro
+# polarity: -1 negative news, 1 positive news
+# urgency: 1 long-term/structural, 2 medium-term/cyclical, 3 immediate catalyst
+DUMMY_GEMINI_DF = pd.DataFrame(
+    [
+        {"ticker": "AAPL", "relevance": 1.0, "polarity": 1, "urgency": 2},
+        {"ticker": "MSFT", "relevance": 1.0, "polarity": 1, "urgency": 2},
+        {"ticker": "GOOGL", "relevance": 1.0, "polarity": 1, "urgency": 2},
+        {"ticker": "AMZN", "relevance": 1.0, "polarity": 1, "urgency": 2},
+        {"ticker": "NVDA", "relevance": 1.5, "polarity": 1, "urgency": 3},
+        {"ticker": "META", "relevance": 1.0, "polarity": 1, "urgency": 1},
+        {"ticker": "JPM", "relevance": 0.5, "polarity": 1, "urgency": 2},
+        {"ticker": "XOM", "relevance": 1.0, "polarity": -1, "urgency": 2},
+        {"ticker": "UNH", "relevance": 0.5, "polarity": 1, "urgency": 1},
+        {"ticker": "TSLA", "relevance": 1.5, "polarity": -1, "urgency": 3},
+    ]
+)
 
 
 def chronological_train_test_split(
@@ -120,7 +108,6 @@ def latest_prediction_report(
             "future_volatility_outcome",
             "predicted_volatility",
             "gemini_sentiment_score",
-            "gemini_risk_flag",
         ]
     ].sort_values("ticker")
 
@@ -206,7 +193,7 @@ def train_models_for_horizon(market_df: pd.DataFrame, horizon_days: int) -> dict
     training_df = build_training_frame(
         market_df,
         horizon_days=horizon_days,
-        gemini_ratings=DUMMY_RATINGS_2,
+        gemini_data=DUMMY_GEMINI_DF,
         feature_columns=FEATURE_COLUMNS,
         rolling_volatility_window=ROLLING_VOLATILITY_WINDOW,
         kalman_q=KALMAN_Q,
@@ -218,11 +205,13 @@ def train_models_for_horizon(market_df: pd.DataFrame, horizon_days: int) -> dict
         train_df,
         FEATURE_COLUMNS,
         "future_return_outcome",
+        horizon_days,
     )
-    risk_model = train_risk_predictor(
+    risk_model = train_volatility_predictor(
         train_df,
         FEATURE_COLUMNS,
         "future_volatility_outcome",
+        horizon_days,
     )
 
     return_path = save_model(return_model, f"gbr_return_model_{horizon_days}d.pkl")
@@ -265,11 +254,14 @@ def train_models_for_horizon(market_df: pd.DataFrame, horizon_days: int) -> dict
         "gbr_learning": loaded_return_model.get_params()["learning_rate"],
         "gbr_depth": loaded_return_model.get_params()["max_depth"],
         "gbr_subsample": loaded_return_model.get_params()["subsample"],
+        "return_weight_equation": "exp(-(ln(2)/(timeline_days*3))*age_days)",
+        "volatility_weight_equation": "exp(-(ln(2)/timeline_days)*age_days)",
         "rfr_n_estimator": loaded_risk_model.get_params()["n_estimators"],
         "rfr_depth": loaded_risk_model.get_params()["max_depth"],
         "rfr_samples": loaded_risk_model.get_params()["min_samples_split"],
-        "ratings?": RATINGS_USED,
-        "risk?": RISK_USED,
+        "gemini_scoring": GEMINI_SCORING_USED,
+        "gemini_min_score": training_df["gemini_sentiment_score"].min(),
+        "gemini_max_score": training_df["gemini_sentiment_score"].max(),
         "kalman_Q": KALMAN_Q,
         "kalman_R": KALMAN_R,
         "lookback_years": LOOKBACK_YEARS,
@@ -294,11 +286,14 @@ def print_sheet_rows(results: list[dict]) -> None:
         "gbr_learning",
         "gbr_depth",
         "gbr_subsample",
+        "return_weight_equation",
+        "volatility_weight_equation",
         "rfr_n_estimator",
         "rfr_depth",
         "rfr_samples",
-        "ratings?",
-        "risk?",
+        "gemini_scoring",
+        "gemini_min_score",
+        "gemini_max_score",
         "kalman_Q",
         "kalman_R",
         "lookback_years",
@@ -319,6 +314,8 @@ def print_sheet_rows(results: list[dict]) -> None:
         {
             "gbr_learning": 4,
             "gbr_subsample": 4,
+            "gemini_min_score": 2,
+            "gemini_max_score": 2,
             "kalman_Q": 8,
             "kalman_R": 8,
             "test_size": 4,

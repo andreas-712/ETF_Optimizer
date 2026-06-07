@@ -10,7 +10,6 @@ FEATURE_COLUMNS = [
     "price_trend_deviation",
     "rolling_volatility",
     "gemini_sentiment_score",
-    "gemini_risk_flag",
 ]
 
 """
@@ -29,4 +28,4 @@ def build_inference_features(timeline: int, df: pd.DataFrame, kalman_filter = Tr
         live_df['price_trend_deviation'] = live_df['adjusted_close'] - live_df['adjusted_close'].rolling(window = timeline, min_periods = 1).mean()
         
     # 2. Extract feature columns the model needs
-    return live_df[['price_trend_deviation', 'rolling_volatility', 'gemini_sentiment_score', 'gemini_risk_flag']]
+    return live_df[FEATURE_COLUMNS]
