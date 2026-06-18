@@ -24,7 +24,7 @@ class TimelineModel:
         self.volatility_model = None
 
     # Trains and saves models under /ml_engine/saved_models
-    def train(self, market_df: pd.DataFrame, gemini_data: pd.DataFrame, kalman_r=1e-2, kalman_q=1e-5):
+    def train(self, market_df: pd.DataFrame, gemini_data: list[dict], kalman_r=1e-2, kalman_q=1e-5):
         training_df = build_training_frame(
             df = market_df,
             horizon_days = self.timeline_days,

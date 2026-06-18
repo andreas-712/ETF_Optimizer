@@ -26,6 +26,7 @@ htmlcov/
 venv/
 env/
 ENV/
+backend/ETF_Opt/
 
 # Build outputs
 dist/
@@ -33,6 +34,10 @@ build/
 *.egg-info/
 .docker/
 docker-compose.override.yml
+
+# ML sandbox outputs
+backend/ml_engine/plots/
+backend/ml_engine/saved_models/
 
 # Frontend dependencies and build artifacts
 node_modules/

@@ -1,27 +1,26 @@
 '''
-- Trains and tests models with dummy Gemini values.
-- Outputs comparison graphs for 20, 90, 360 day windows
-for volatility and return predictions.
+- Trains and tests models with Gemini values.
+- Outputs latest single predictions for 20, 90, 360 day windows.
 - Outputs a TSV block to log parameters and accuracy
 '''
+import asyncio
 from pathlib import Path
 import sys
 
 import joblib
-import matplotlib
 import numpy as np
 import pandas as pd
-
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
-from ml_engine.market_data_collection import fetch_ticker_data
+from ml_engine.market_data_collection import fetch_gemini_ticker_data
+from ml_engine.gemini import fetch_ticker_data as fetch_gemini_ticker_data
 from ml_engine.train import (
+    build_model_feature_frame,
     build_training_frame,
+    return_half_life_days,
     save_model,
     train_return_predictor,
     train_volatility_predictor,
@@ -45,24 +44,17 @@ FEATURE_COLUMNS = [
     "gemini_sentiment_score",
 ]
 
-# Dummy sandbox values.
-# relevance: 0.5 low/tangential, 1.0 medium/direct, 1.5 high/front-page macro
-# polarity: -1 negative news, 1 positive news
-# urgency: 1 long-term/structural, 2 medium-term/cyclical, 3 immediate catalyst
-DUMMY_GEMINI_DF = pd.DataFrame(
-    [
-        {"ticker": "AAPL", "relevance": 1.0, "polarity": 1, "urgency": 2},
-        {"ticker": "MSFT", "relevance": 1.0, "polarity": 1, "urgency": 2},
-        {"ticker": "GOOGL", "relevance": 1.0, "polarity": 1, "urgency": 2},
-        {"ticker": "AMZN", "relevance": 1.0, "polarity": 1, "urgency": 2},
-        {"ticker": "NVDA", "relevance": 1.5, "polarity": 1, "urgency": 3},
-        {"ticker": "META", "relevance": 1.0, "polarity": 1, "urgency": 1},
-        {"ticker": "JPM", "relevance": 0.5, "polarity": 1, "urgency": 2},
-        {"ticker": "XOM", "relevance": 1.0, "polarity": -1, "urgency": 2},
-        {"ticker": "UNH", "relevance": 0.5, "polarity": 1, "urgency": 1},
-        {"ticker": "TSLA", "relevance": 1.5, "polarity": -1, "urgency": 3},
-    ]
-)
+async def fetch_gemini_records(
+    tickers: list[str],
+    date: str,
+    horizon_days: int,
+) -> list[dict]:
+    return await asyncio.gather(
+        *[
+            fetch_gemini_ticker_data(ticker, date, horizon_days)
+            for ticker in tickers
+        ]
+    )
 
 
 def chronological_train_test_split(
@@ -89,9 +81,13 @@ def chronological_train_test_split(
 
 
 def latest_prediction_report(
-    df: pd.DataFrame, return_model, risk_model, horizon_days: int
+    df: pd.DataFrame,
+    return_model,
+    risk_model,
+    horizon_days: int,
 ) -> pd.DataFrame:
-    latest_rows = df.sort_values("date").groupby("ticker", as_index=False).tail(1).copy()
+    latest_rows = df.dropna(subset=FEATURE_COLUMNS)
+    latest_rows = latest_rows.sort_values("date").groupby("ticker", as_index=False).tail(1).copy()
     X_latest = latest_rows[FEATURE_COLUMNS]
 
     latest_rows["prediction_horizon_days"] = horizon_days
@@ -103,9 +99,7 @@ def latest_prediction_report(
             "date",
             "ticker",
             "prediction_horizon_days",
-            "future_return_outcome",
             "predicted_return",
-            "future_volatility_outcome",
             "predicted_volatility",
             "gemini_sentiment_score",
         ]
@@ -124,76 +118,16 @@ def volatility_test_mae_percent(test_df: pd.DataFrame, risk_model) -> float:
     return mae * 100
 
 
-def plot_return_predictions(test_df: pd.DataFrame, return_model, horizon_days: int) -> Path:
-    test_df = test_df.copy()
-    test_df["predicted_return"] = return_model.predict(test_df[FEATURE_COLUMNS])
-
-    tickers = sorted(test_df["ticker"].unique())
-    fig, axes = plt.subplots(5, 2, figsize=(16, 18), sharex=False)
-    axes = axes.flatten()
-
-    for ax, ticker in zip(axes, tickers):
-        ticker_df = test_df[test_df["ticker"] == ticker].sort_values("date")
-        ax.plot(ticker_df["date"], ticker_df["future_return_outcome"] * 100, label="Actual")
-        ax.plot(ticker_df["date"], ticker_df["predicted_return"] * 100, label="Predicted")
-        ax.set_title(ticker)
-        ax.set_ylabel("Return %")
-        ax.tick_params(axis="x", rotation=30)
-        ax.grid(True, alpha=0.3)
-
-    for ax in axes[len(tickers):]:
-        ax.axis("off")
-
-    handles, labels = axes[0].get_legend_handles_labels()
-    fig.legend(handles, labels, loc="upper center", ncol=2)
-    fig.suptitle(f"{horizon_days}-Trading-Day Return: Predicted vs Actual", y=0.995)
-    fig.tight_layout(rect=(0, 0, 1, 0.98))
-
-    PLOT_DIR.mkdir(parents=True, exist_ok=True)
-    output_path = PLOT_DIR / f"return_predictions_{horizon_days}d.png"
-    fig.savefig(output_path)
-    plt.close(fig)
-    return output_path
-
-
-def plot_volatility_predictions(test_df: pd.DataFrame, risk_model, horizon_days: int) -> Path:
-    test_df = test_df.copy()
-    test_df["predicted_volatility"] = risk_model.predict(test_df[FEATURE_COLUMNS])
-
-    tickers = sorted(test_df["ticker"].unique())
-    fig, axes = plt.subplots(5, 2, figsize=(16, 18), sharex=False)
-    axes = axes.flatten()
-
-    for ax, ticker in zip(axes, tickers):
-        ticker_df = test_df[test_df["ticker"] == ticker].sort_values("date")
-        ax.plot(ticker_df["date"], ticker_df["future_volatility_outcome"] * 100, label="Actual")
-        ax.plot(ticker_df["date"], ticker_df["predicted_volatility"] * 100, label="Predicted")
-        ax.set_title(ticker)
-        ax.set_ylabel("Volatility %")
-        ax.tick_params(axis="x", rotation=30)
-        ax.grid(True, alpha=0.3)
-
-    for ax in axes[len(tickers):]:
-        ax.axis("off")
-
-    handles, labels = axes[0].get_legend_handles_labels()
-    fig.legend(handles, labels, loc="upper center", ncol=2)
-    fig.suptitle(f"{horizon_days}-Trading-Day Volatility: Predicted vs Actual", y=0.995)
-    fig.tight_layout(rect=(0, 0, 1, 0.98))
-
-    PLOT_DIR.mkdir(parents=True, exist_ok=True)
-    output_path = PLOT_DIR / f"volatility_predictions_{horizon_days}d.png"
-    fig.savefig(output_path)
-    plt.close(fig)
-    return output_path
-
-
-def train_models_for_horizon(market_df: pd.DataFrame, horizon_days: int) -> dict:
+def train_models_for_horizon(
+    market_df: pd.DataFrame,
+    gemini_data: list[dict],
+    horizon_days: int,
+) -> tuple[dict, pd.DataFrame]:
     print(f"\nTraining {horizon_days}-trading-day models")
     training_df = build_training_frame(
         market_df,
         horizon_days=horizon_days,
-        gemini_data=DUMMY_GEMINI_DF,
+        gemini_data=gemini_data,
         feature_columns=FEATURE_COLUMNS,
         rolling_volatility_window=ROLLING_VOLATILITY_WINDOW,
         kalman_q=KALMAN_Q,
@@ -221,8 +155,15 @@ def train_models_for_horizon(market_df: pd.DataFrame, horizon_days: int) -> dict
     loaded_return_model = joblib.load(return_path)
     loaded_risk_model = joblib.load(risk_path)
 
+    prediction_df = build_model_feature_frame(
+        market_df,
+        gemini_data,
+        rolling_volatility_window=ROLLING_VOLATILITY_WINDOW,
+        kalman_q=KALMAN_Q,
+        kalman_r=KALMAN_R,
+    )
     report = latest_prediction_report(
-        training_df,
+        prediction_df,
         loaded_return_model,
         loaded_risk_model,
         horizon_days=horizon_days,
@@ -230,13 +171,8 @@ def train_models_for_horizon(market_df: pd.DataFrame, horizon_days: int) -> dict
     print("\nSaved models:")
     print(f"- {return_path}")
     print(f"- {risk_path}")
-    print("\nLatest per-ticker dummy sandbox comparison:")
+    print("\nLatest per-ticker predictions:")
     print(report.to_string(index=False))
-
-    return_plot_path = plot_return_predictions(test_df, loaded_return_model, horizon_days)
-    volatility_plot_path = plot_volatility_predictions(test_df, loaded_risk_model, horizon_days)
-    print(f"\nSaved return plot: {return_plot_path}")
-    print(f"Saved volatility plot: {volatility_plot_path}")
 
     return_mae = return_test_mae_percent(test_df, loaded_return_model)
     volatility_mae = volatility_test_mae_percent(test_df, loaded_risk_model)
@@ -248,13 +184,12 @@ def train_models_for_horizon(market_df: pd.DataFrame, horizon_days: int) -> dict
         "volatility_test_mae_percent": volatility_mae,
         "return_model_path": return_path,
         "risk_model_path": risk_path,
-        "return_plot_path": return_plot_path,
-        "volatility_plot_path": volatility_plot_path,
         "gbr_n_estimator": loaded_return_model.get_params()["n_estimators"],
         "gbr_learning": loaded_return_model.get_params()["learning_rate"],
         "gbr_depth": loaded_return_model.get_params()["max_depth"],
         "gbr_subsample": loaded_return_model.get_params()["subsample"],
-        "return_weight_equation": "exp(-(ln(2)/(timeline_days*3))*age_days)",
+        "return_half_life_days": return_half_life_days(horizon_days),
+        "return_weight_equation": "exp(-(ln(2)/return_half_life_days)*age_days)",
         "volatility_weight_equation": "exp(-(ln(2)/timeline_days)*age_days)",
         "rfr_n_estimator": loaded_risk_model.get_params()["n_estimators"],
         "rfr_depth": loaded_risk_model.get_params()["max_depth"],
@@ -277,7 +212,7 @@ def train_models_for_horizon(market_df: pd.DataFrame, horizon_days: int) -> dict
         "test_rows": len(test_df),
         "return_mae": return_mae,
         "volatilility_mae": volatility_mae,
-    }
+    }, report
 
 
 def print_sheet_rows(results: list[dict]) -> None:
@@ -286,6 +221,7 @@ def print_sheet_rows(results: list[dict]) -> None:
         "gbr_learning",
         "gbr_depth",
         "gbr_subsample",
+        "return_half_life_days",
         "return_weight_equation",
         "volatility_weight_equation",
         "rfr_n_estimator",
@@ -333,15 +269,45 @@ def print_sheet_rows(results: list[dict]) -> None:
     print(f"\nSaved TSV: {output_path}")
 
 
-def main():
+def print_prediction_rows(prediction_reports: list[pd.DataFrame]) -> None:
+    rows = pd.concat(prediction_reports, ignore_index=True).round(
+        {
+            "predicted_return": 4,
+            "predicted_volatility": 4,
+            "gemini_sentiment_score": 2,
+        }
+    )
+
+    PLOT_DIR.mkdir(parents=True, exist_ok=True)
+    output_path = PLOT_DIR / "latest_predictions.tsv"
+    rows.to_csv(output_path, sep="\t", index=False)
+
+    print("\nLatest Predictions TSV:")
+    print(rows.to_csv(sep="\t", index=False).strip())
+    print(f"\nSaved latest predictions: {output_path}")
+
+
+async def main_async():
     market_df = fetch_ticker_data(TICKERS, lookback_years = LOOKBACK_YEARS)
     if market_df.empty:
         raise RuntimeError("No market data was downloaded. Check yfinance/network access.")
 
-    results = [
-        train_models_for_horizon(market_df, horizon_days)
-        for horizon_days in PREDICTION_HORIZON_DAYS
-    ]
+    latest_market_date = pd.to_datetime(market_df["date"]).max().date().isoformat()
+    results = []
+    prediction_reports = []
+    for horizon_days in PREDICTION_HORIZON_DAYS:
+        gemini_data = await fetch_gemini_records(
+            TICKERS,
+            latest_market_date,
+            horizon_days,
+        )
+        result, prediction_report = train_models_for_horizon(
+            market_df,
+            gemini_data,
+            horizon_days,
+        )
+        results.append(result)
+        prediction_reports.append(prediction_report)
 
     summary = pd.DataFrame(results)
     summary["return_test_mae_percent"] = summary["return_test_mae_percent"].round(2)
@@ -359,6 +325,11 @@ def main():
         ].to_string(index = False)
     )
     print_sheet_rows(results)
+    print_prediction_rows(prediction_reports)
+
+
+def main():
+    asyncio.run(main_async())
 
 
 if __name__ == "__main__":

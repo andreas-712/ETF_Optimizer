@@ -9,6 +9,36 @@ import math
 from math_engine.Kalman_Filter import Kalman_Filter
 
 SAVED_MODEL_DIR = Path(__file__).resolve().parent / "saved_models"
+RETURN_HALF_LIFE_MULTIPLIER = 2
+MIN_RETURN_HALF_LIFE_DAYS = 30
+MAX_RETURN_HALF_LIFE_DAYS = 360
+
+
+def return_half_life_days(timeline_days: int) -> int:
+    raw_half_life = timeline_days * RETURN_HALF_LIFE_MULTIPLIER
+    return max(
+        MIN_RETURN_HALF_LIFE_DAYS,
+        min(raw_half_life, MAX_RETURN_HALF_LIFE_DAYS),
+    )
+
+
+def return_model_config(timeline_days: int) -> dict:
+    if timeline_days <= 20:
+        return {
+            "n_estimators": 120,
+            "learning_rate": 0.10,
+        }
+
+    if timeline_days >= 360:
+        return {
+            "n_estimators": 80,
+            "learning_rate": 0.08,
+        }
+
+    return {
+        "n_estimators": 100,
+        "learning_rate": 0.09,
+    }
 
 
 def save_model(model, filename: str) -> Path:
@@ -22,14 +52,13 @@ def save_model(model, filename: str) -> Path:
 Builds the Gemini inference feature frame for overall market sentiment impact
 Sentiment score = relevance * polarity * urgency
 """
-def build_gemini_feature_frame(gemini_df: pd.DataFrame) -> pd.DataFrame:
+def build_gemini_feature_frame(gemini_data: list[dict]) -> pd.DataFrame:
     # 1. Checks for data integrity
+    result = pd.DataFrame(gemini_data)
     required_columns = {"ticker", "relevance", "polarity", "urgency"}
-    missing_columns = required_columns - set(gemini_df.columns)
+    missing_columns = required_columns - set(result.columns)
     if missing_columns:
         raise ValueError(f"Gemini data is missing columns: {sorted(missing_columns)}")
-
-    result = gemini_df.copy()
 
     duplicate_tickers = result.loc[result["ticker"].duplicated(), "ticker"].unique()
     if len(duplicate_tickers) > 0:
@@ -55,35 +84,52 @@ def build_gemini_feature_frame(gemini_df: pd.DataFrame) -> pd.DataFrame:
     return result[["ticker", "gemini_sentiment_score"]]
 
 
-def add_gemini_inputs(df: pd.DataFrame, gemini_df: pd.DataFrame) -> pd.DataFrame:
-    gemini_features = build_gemini_feature_frame(gemini_df)
+def add_gemini_inputs(df: pd.DataFrame, gemini_data) -> pd.DataFrame:
+    gemini_features = build_gemini_feature_frame(gemini_data)
     return df.merge(gemini_features, on="ticker", how="left")
 
 
-def build_training_frame(
+def build_model_feature_frame(
     df: pd.DataFrame,
-    horizon_days: int,
-    gemini_data: pd.DataFrame,
-    feature_columns: list[str],
+    gemini_data,
     rolling_volatility_window: int = 10,
     kalman_q: float = 1e-5,
     kalman_r: float = 1e-2,
 ) -> pd.DataFrame:
-    # Populate df with relevant data, process with Kalman filter, add Gemini inference
     result = df.sort_values(["ticker", "date"]).copy()
     result = Kalman_Filter(Q=kalman_q, R=kalman_r).smooth_dataframe(result)
     result = add_gemini_inputs(result, gemini_data)
 
-    # Sort by ticker
     grouped = result.groupby("ticker", group_keys = False)
     result["daily_return"] = grouped["adjusted_close"].pct_change()
-
     result["price_trend_deviation"] = (
         result["adjusted_close"] - result["kalman_smoothed_price"]
     )
     result["rolling_volatility"] = grouped["daily_return"].transform(
         lambda values: values.rolling(rolling_volatility_window).std()
     )
+
+    return result
+
+
+def build_training_frame(
+    df: pd.DataFrame,
+    horizon_days: int,
+    gemini_data: list[dict],
+    feature_columns: list[str],
+    rolling_volatility_window: int = 10,
+    kalman_q: float = 1e-5,
+    kalman_r: float = 1e-2,
+) -> pd.DataFrame:
+    result = build_model_feature_frame(
+        df,
+        gemini_data,
+        rolling_volatility_window=rolling_volatility_window,
+        kalman_q=kalman_q,
+        kalman_r=kalman_r,
+    )
+
+    grouped = result.groupby("ticker", group_keys = False)
     result["future_return_outcome"] = grouped["adjusted_close"].transform(
         lambda prices: prices.pct_change(horizon_days).shift(-horizon_days)
     )
@@ -110,19 +156,20 @@ def train_return_predictor(
     # Extract input and output columns
     X = df[feature_columns]
     y = df[target_column]
+    config = return_model_config(timeline_days)
     
     # Set model hyperparameters
     return_model = GradientBoostingRegressor(
-        n_estimators = 50,     # Sequential tree learning steps
-        learning_rate = 0.005,   # Step size down loss gradient
+        n_estimators = config["n_estimators"],     # Sequential tree learning steps
+        learning_rate = config["learning_rate"],   # Step size down loss gradient
         max_depth = 3,          # Capture interactive feature variables
         subsample = 0.85,       # Minimize variance (hide some data from predictors)
         random_state = 10
     )
 
     # Build exponential decay (half life) weight array
-    # a is lower for return model compared to volatility model
-    a = math.log(2) / (timeline_days * 3)
+    half_life_days = return_half_life_days(timeline_days)
+    a = math.log(2) / half_life_days
     dates = pd.to_datetime(df["date"])
     age_days = (dates.max() - dates).dt.days
     weights = [math.exp(-a * age) for age in age_days]

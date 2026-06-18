@@ -3,4 +3,6 @@ scikit-learn
 yfinance
 filterpy
 joblib
-matplotlib
+google-genai
+python-dotenv
+requests

@@ -1,10 +1,22 @@
-# Collects market data for tickers
+'''
+Collects market data for tickers
+Currently uses Financial Modeling Prep (FMP) API for market news
+'''
 
+import os
+from pathlib import Path
 import yfinance as yf
 import pandas as pd
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
+import requests
+from dotenv import load_dotenv
 
+BACKEND_DIR = Path(__file__).resolve().parents[1]
+load_dotenv(BACKEND_DIR / ".flaskenv")
+
+FMP_KEY = os.getenv("FMP_KEY")
+FINANCIAL_URL = os.getenv("FINANCIAL_URL")
 
 # Standardizes yf data to a series column
 def _as_series(column_data):
@@ -67,3 +79,31 @@ def fetch_ticker_data(tickers: list, lookback_years: int) -> pd.DataFrame:
         return raw_market_matrix # Filled dataframe
 
     return pd.DataFrame() # Empty data frame on failure
+
+def fetch_ticker_summaries(ticker: str, horizon_days: int, cutoff_date: str, pages=5) -> list:
+    """
+    Returns executive summaries for articles about the given ticker.
+    """
+    url = FINANCIAL_URL or "https://financialmodelingprep.com/stable/news/stock"
+    cutoff = pd.to_datetime(cutoff_date).date()
+    start_date = cutoff - timedelta(days=horizon_days)
+
+    params = {
+        "symbols": ticker,
+        "from": start_date.isoformat(),
+        "to": cutoff.isoformat(),
+        "limit": pages,
+        "page": 0,
+        "apikey": FMP_KEY
+    }
+
+    response = requests.get(url, params=params)
+
+    # Return empty dict on failure
+    if response.status_code != 200:
+        print(f"API Failure: Status {response.status_code}")
+        return []
+    
+
+    articles_list = response.json()
+    return [data["text"] for data in articles_list]
