@@ -37,6 +37,7 @@ instance/
 # ML sandbox outputs
 backend/ml_engine/plots/
 backend/ml_engine/saved_models/
+gemini_training_data.csv
 
 # Frontend / Node
 node_modules/

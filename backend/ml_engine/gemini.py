@@ -5,6 +5,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
+from ml_engine.configs import DATA_MODE, LIVE_MODE, GEMINI_USE_SEARCH, GEMINI_API_KEY
 
 # Load env variables
 BACKEND_DIR = Path(__file__).resolve().parents[1]
@@ -72,21 +73,23 @@ Calibration rules:
 
 Aggregate all relevant events into one final score. Do not return event lists, nested objects, arrays, explanations, markdown, ticker, date, or any extra keys."""
 
-SYSTEM_PROMPT = BACKTESTING_PROMPT
+if DATA_MODE == LIVE_MODE:
+    SYSTEM_PROMPT = LIVE_PREDICTION_PROMPT
+else:
+    SYSTEM_PROMPT = BACKTESTING_PROMPT
 
 async def fetch_gemini_ticker_data(
     ticker: str,
     date: str,
     timeline_days: int,
     executive_summaries: list,
-    system_prompt: str = BACKTESTING_PROMPT,
 ):
     # Stateless, asynchronous call for a single ticker
     print(f"Dispatching request for {ticker}...")
     
     try:
         config_kwargs = {
-            "system_instruction": system_prompt,
+            "system_instruction": SYSTEM_PROMPT,
             "temperature": 0.0,
             "response_mime_type": "application/json",
         }

@@ -38,6 +38,7 @@ docker-compose.override.yml
 # ML sandbox outputs
 backend/ml_engine/plots/
 backend/ml_engine/saved_models/
+gemini_training_data.csv
 
 # Frontend dependencies and build artifacts
 node_modules/

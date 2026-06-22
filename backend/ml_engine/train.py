@@ -65,9 +65,9 @@ def build_gemini_feature_frame(gemini_data: list[dict]) -> pd.DataFrame:
         raise ValueError(f"Gemini data has duplicate tickers: {sorted(duplicate_tickers)}")
 
     allowed_scores = {
-        "relevance": {0.5, 1.0, 1.5},
+        "relevance": {i for i in range(0, 11)},
         "polarity": {-1, 1},
-        "urgency": {1, 2, 3},
+        "urgency": {i for i in range(0, 11)},
     }
     for column, allowed_values in allowed_scores.items():
         invalid_values = result.loc[~result[column].isin(allowed_values), column].unique()
@@ -141,17 +141,18 @@ def build_training_frame(
         subset=feature_columns + ["future_return_outcome", "future_volatility_outcome"]
     )
 
-"""
-Trains a sequential Gradient Boosting model
-Captures asset momentum/inflection signals based on 
-Kalman and Gemini features.
-"""
+
 def train_return_predictor(
     df: pd.DataFrame,
     feature_columns: list[str],
     target_column: str,
     timeline_days: int,
 ):
+    """
+    Trains a sequential Gradient Boosting model.
+    Captures asset momentum/inflection signals based on 
+    Kalman and Gemini features.
+    """
 
     # Extract input and output columns
     X = df[feature_columns]
@@ -178,17 +179,18 @@ def train_return_predictor(
 
     return return_model
 
-"""
-Trains a Random Forest Regression model
-Predicts market volatility / risk for specified assets
-based on Kalman and Gemini features.
-"""
+
 def train_volatility_predictor(
     df: pd.DataFrame,
     feature_columns: list[str],
     target_column: str,
     timeline_days: int,
 ):
+    """
+    Trains a Random Forest Regression model.
+    Predicts market volatility / risk for specified assets
+    based on Kalman and Gemini features.
+    """
 
     X = df[feature_columns]
     y = df[target_column]

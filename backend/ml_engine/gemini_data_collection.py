@@ -5,7 +5,6 @@ import asyncio
 from datetime import datetime, timedelta
 from pathlib import Path
 import sys
-
 import pandas as pd
 
 
@@ -69,17 +68,7 @@ async def fetch_gemini_records(tickers: list[str], date: str, horizon_days: int)
 
             record = await fetch_gemini_ticker_data(ticker, date, horizon_days, executive_summaries)
             error = str(record.get("error", "")).lower()
-            quota_exhausted = (
-                "current quota" in error
-                or "plan and billing" in error
-                or "daily" in error
-            )
             rate_limited = "429" in error
-
-            if quota_exhausted:
-                records.append(record)
-                print("Quota exhausted. Stopping instead of retrying the same request.")
-                return records
 
             if not rate_limited or retries >= RATE_LIMIT_MAX_RETRIES:
                 records.append(record)
