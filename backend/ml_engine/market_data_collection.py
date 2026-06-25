@@ -11,16 +11,17 @@ import datetime as dt
 from zoneinfo import ZoneInfo
 import requests
 from dotenv import load_dotenv
-from ml_engine.configs import DATA_MODE, LIVE_MODE
 import math
 from collections import defaultdict
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 load_dotenv(BACKEND_DIR / ".flaskenv")
 
+LIVE_MODE = "live"
+DATA_MODE = os.getenv("DATA_MODE", "backtest").lower()
 FMP_KEY = os.getenv("FMP_KEY")
 FMP_URL = os.getenv("FINANCIAL_URL")
-FMP_ENDPOINTS = {}
+FMP_ENDPOINTS = ["balance-sheet-statement", "financial-growth", "grades-historical"]
 
 
 def _as_series(column_data):
@@ -90,9 +91,9 @@ def fetch_ticker_data(tickers: list, lookback_years: int) -> pd.DataFrame:
     return pd.DataFrame() # Empty data frame on failure
 
 
-def fetch_ticker_summaries(ticker: str, horizon_days: int, cutoff_date: str) -> list:
+def fetch_ticker_summaries(ticker: str, horizon_days: int, cutoff_date: str) -> dict:
     """
-    Returns executive summaries for articles about the given ticker.
+    Returns data and executive summaries for articles about the given ticker.
     """
     cutoff = pd.to_datetime(cutoff_date).date()
     start_date = cutoff - dt.timedelta(days=horizon_days)
@@ -104,19 +105,21 @@ def fetch_ticker_summaries(ticker: str, horizon_days: int, cutoff_date: str) -> 
     else:
         limit = _get_fmp_limit(cutoff_date)
 
-    for i in range(len(FMP_ENDPOINTS)): # 3 APIs for FMP
+    # 3 APIs for FMP
+    for i in range(len(FMP_ENDPOINTS)):
         if i == 0:
             # Balance sheet
-            params = {"symbol": ticker, "limit": limit, "period": "quarter"} # limit = number of quarters
+            params = {"symbol": ticker.upper(), "limit": limit, "period": "quarter"} # limit = number of quarters
         if i == 1:
             # Financial growth
-            params = {"symbol": ticker, "limit": limit, "period": "quarter"} # limit = number of quarters
+            params = {"symbol": ticker.upper(), "limit": limit, "period": "quarter"} # limit = number of quarters
         if i == 2:
             # Historical grades
-            params = {"symbol": ticker, "limit": limit * 15 if not DATA_MODE == LIVE_MODE else 1} # Estimate reports at 15 per quarter
+            params = {"symbol": ticker.upper(), "limit": limit * 15 if not DATA_MODE == LIVE_MODE else 1} # Estimate reports at 15 per quarter
 
-        endpoint = FMP_ENDPOINTS[i]
-        responses.append(requests.get(endpoint, params = params).json())
+        params["apikey"] = FMP_KEY
+        req = FMP_URL + FMP_ENDPOINTS[i]
+        responses.append(requests.get(req, params = params).json())
 
     # Fetch stock news data
     if DATA_MODE == LIVE_MODE:
@@ -134,10 +137,13 @@ def _fetch_live_fundamentals(ticker: str) -> dict:
     Fetches fundamentals for live inference using using yfinance API
     """
 
+    
+
 def _fetch_historical_fundamentals(ticker: str, cutoff_date: str) -> dict:
     """
     Fetches historical fundamentals for backtesting using Finnhub API
     """
+
 
 def _get_fmp_limit(cutoff_date_str: str) -> int:
     """
@@ -177,7 +183,7 @@ def _binary_search_index(dates: list, target: str) -> int:
     return l
 
 
-def _parse_responses(responses: list, cutoff_date: str) -> dict:
+def _parse_responses(responses: list, cutoff_date: str) -> defaultdict:
     """
     Returns a parsed, prompt-ready dict for inference
     """

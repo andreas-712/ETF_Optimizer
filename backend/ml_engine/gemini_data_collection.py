@@ -56,13 +56,12 @@ async def fetch_gemini_records(tickers: list[str], date: str, horizon_days: int)
         retries = 0
 
         while True:
-            # Currently returns 5 article summaries from FMP
             executive_summaries = fetch_ticker_summaries(ticker, horizon_days, date)
             if len(executive_summaries) == 0:
-                print(f"No executive summaries found for {ticker}, {horizon_days}d, {date}")
+                print(f"No data or executive summaries found for {ticker}, {horizon_days}d, {date}")
                 records.append({
                     "ticker": ticker,
-                    "error": "No executive summaries found",
+                    "error": "No data or executive summaries found",
                 })
                 break
 

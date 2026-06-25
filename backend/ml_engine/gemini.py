@@ -5,13 +5,14 @@ from pathlib import Path
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
-from ml_engine.configs import DATA_MODE, LIVE_MODE, GEMINI_USE_SEARCH, GEMINI_API_KEY
 
 # Load env variables
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 PROJECT_DIR = BACKEND_DIR.parent
 load_dotenv(BACKEND_DIR / ".flaskenv")
 
+LIVE_MODE = "live"
+DATA_MODE = os.getenv("DATA_MODE", "backtest").lower()
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 if not GEMINI_API_KEY:
     raise ValueError(
@@ -98,7 +99,7 @@ async def fetch_gemini_ticker_data(
 
         response = await client.aio.models.generate_content(
             model=GEMINI_MODEL,
-            contents=f"Extract data for {ticker} using only information available on or before {date}. Base your prediction on the following provided article texts: {executive_summaries}. Score the expected direction and catalyst strength over approximately {timeline_days} days after {date}.",
+            contents=f"Extract data for {ticker} using only information available on or before {date}. Base your prediction on the following provided company metrics and executive summaries: {executive_summaries}. Score the expected direction and catalyst strength over approximately {timeline_days} days after {date}.",
             config=types.GenerateContentConfig(**config_kwargs)
         )
         
