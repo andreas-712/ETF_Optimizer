@@ -48,11 +48,11 @@ def save_model(model, filename: str) -> Path:
     return output_path
 
 
-"""
-Builds the Gemini inference feature frame for overall market sentiment impact
-Sentiment score = relevance * polarity * urgency
-"""
 def build_gemini_feature_frame(gemini_data: list[dict]) -> pd.DataFrame:
+    """
+    Builds the Gemini inference feature frame for overall market sentiment impact
+    Sentiment score = relevance * polarity * urgency
+    """
     # 1. Checks for data integrity
     result = pd.DataFrame(gemini_data)
     required_columns = {"ticker", "relevance", "polarity", "urgency"}

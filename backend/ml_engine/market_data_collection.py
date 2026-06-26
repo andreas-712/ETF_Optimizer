@@ -22,6 +22,9 @@ DATA_MODE = os.getenv("DATA_MODE", "backtest").lower()
 FMP_KEY = os.getenv("FMP_KEY")
 FMP_URL = os.getenv("FINANCIAL_URL")
 FMP_ENDPOINTS = ["balance-sheet-statement", "financial-growth", "grades-historical"]
+FINNHUB_URL = os.getenv("FMP_URL")
+FINNHUB_KEY = os.getenv("FMP_KEY")
+FINNHUB_ENDPOINT = "/company-news?"
 
 
 def _as_series(column_data):
@@ -132,17 +135,51 @@ def fetch_ticker_summaries(ticker: str, horizon_days: int, cutoff_date: str) -> 
     return parsed_data_text
 
 
-def _fetch_live_fundamentals(ticker: str) -> dict:
+def _fetch_live_fundamentals(ticker: str) -> list:
     """
     Fetches fundamentals for live inference using using yfinance API
     """
 
     
-
-def _fetch_historical_fundamentals(ticker: str, cutoff_date: str) -> dict:
+# EDIT: ONLY RETURN LATEST 3 ARTICLES SUMMARIES IN LIST: "summary" field in list of JSON objects per article
+def _fetch_historical_fundamentals(ticker: str, cutoff_date_str: str) -> list:
     """
     Fetches historical fundamentals for backtesting using Finnhub API
     """
+    cutoff_date = dt.datetime.strptime(cutoff_date_str, "%Y-%m-%d").date()
+    start_date = cutoff_date - dt.timedelta(days = 30)
+
+    start = start_date.strftime("%Y-%m-%d")
+    to = cutoff_date.strftime("%Y-%m-%d")
+
+    params = {"symbol": ticker, "from": start, "to": to, "token": FINNHUB_KEY}
+
+    try:
+        print(f"Querying Finnhub for company news...")
+
+        # Query Finnhub API
+        response = requests.get(FINNHUB_URL + FINNHUB_ENDPOINT, params=params)
+
+        if response.status_code == 200:
+            news_data = response.json()
+            print(f"Retrieved {len(news_data)} articles")
+            latest_articles = sorted(
+                news_data,
+                key = lambda article: article["datetime"],
+                reverse = True # Unix timestamp, larger = newer
+            )
+            return [article["summary"] for article in latest_articles[:3]]
+
+        elif response.status_code == 429:
+            print("429 Error: Burst rate hit")
+
+        else:
+            print(f"Error {response.status_code}: {response.text}")
+
+    except Exception as e:
+        print(f"Request failed: {e}")
+
+    return []
 
 
 def _get_fmp_limit(cutoff_date_str: str) -> int:
@@ -221,3 +258,32 @@ def _parse_responses(responses: list, cutoff_date: str) -> defaultdict:
     parsed_responses_dict.update(responses[3]) # Up to 3 headlines in an array
 
     return parsed_responses_dict
+
+# EDIT: RETURN ALL ARTICLES SUMMARIES IN LIST: "summary" field in list of JSON objects per article
+def fetch_time_sliced_fundamentals(ticker: str, start_date_str: str, cutoff_date_str) -> list:
+    """
+    Fetches historical fundamentals from given start and end dates from Finnhub API
+    """
+    params = {"symbol": ticker, "from": start_date_str, "to": cutoff_date_str, "token": FINNHUB_KEY}
+
+    try:
+        print(f"Querying Finnhub for company news...")
+
+        # Query Finnhub API
+        response = requests.get(FINNHUB_URL + FINNHUB_ENDPOINT, params=params)
+
+        if response.status_code == 200:
+            news_data = response.json()
+            print(f"Retrieved {len(news_data)} articles")
+            return [article["summary"] for article in news_data]
+
+        elif response.status_code == 429:
+            print("429 Error: Burst rate hit")
+
+        else:
+            print(f"Error {response.status_code}: {response.text}")
+
+    except Exception as e:
+        print(f"Request failed: {e}")
+        
+    return []
