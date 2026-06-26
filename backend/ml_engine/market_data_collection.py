@@ -135,10 +135,19 @@ def fetch_ticker_summaries(ticker: str, horizon_days: int, cutoff_date: str) -> 
     return parsed_data_text
 
 
-def _fetch_live_fundamentals(ticker: str) -> list:
+def _fetch_live_fundamentals(ticker: str, count: int = 3) -> list:
     """
     Fetches fundamentals for live inference using using yfinance API
     """
+    try:
+        tick = yf.Ticker(ticker)
+        articles = tick.news
+        summaries = [a.get("title") for a in articles[:count] if a.get("title")] # Get latest 3 articles
+        return summaries
+
+    except Exception as e:
+        print(f"Failed to fetch article summaries for ticker {ticker}: {e}")
+        return []
 
     
 # EDIT: ONLY RETURN LATEST 3 ARTICLES SUMMARIES IN LIST: "summary" field in list of JSON objects per article

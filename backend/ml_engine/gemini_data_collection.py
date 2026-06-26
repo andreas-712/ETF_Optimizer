@@ -51,13 +51,16 @@ def normalize_gemini_record(record: dict) -> dict | None:
 
 
 async def fetch_gemini_records(tickers: list[str], date: str, horizon_days: int) -> list[dict]:
+    """
+    Fetches Gemini inferences for the given ticker, date, and prediction horizon
+    """
     records = []
     for ticker in tickers:
         retries = 0
 
         while True:
-            executive_summaries = fetch_ticker_summaries(ticker, horizon_days, date)
-            if len(executive_summaries) == 0:
+            summaries_and_data = fetch_ticker_summaries(ticker, horizon_days, date)
+            if len(summaries_and_data) == 0:
                 print(f"No data or executive summaries found for {ticker}, {horizon_days}d, {date}")
                 records.append({
                     "ticker": ticker,
@@ -65,7 +68,7 @@ async def fetch_gemini_records(tickers: list[str], date: str, horizon_days: int)
                 })
                 break
 
-            record = await fetch_gemini_ticker_data(ticker, date, horizon_days, executive_summaries)
+            record = await fetch_gemini_ticker_data(ticker, date, horizon_days, summaries_and_data)
             error = str(record.get("error", "")).lower()
             rate_limited = "429" in error
 
