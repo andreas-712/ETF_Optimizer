@@ -21,7 +21,7 @@ LIVE_MODE = "live"
 DATA_MODE = os.getenv("DATA_MODE", "backtest").lower()
 FMP_KEY = os.getenv("FMP_KEY")
 FMP_URL = os.getenv("FINANCIAL_URL")
-FMP_ENDPOINTS = ["balance-sheet-statement", "financial-growth", "grades-historical"]
+FMP_ENDPOINTS = ["balance-sheet-statement", "grades-historical"]
 FINNHUB_URL = os.getenv("FMP_URL")
 FINNHUB_KEY = os.getenv("FMP_KEY")
 FINNHUB_ENDPOINT = "/company-news?"
@@ -108,15 +108,12 @@ def fetch_ticker_summaries(ticker: str, horizon_days: int, cutoff_date: str) -> 
     else:
         limit = _get_fmp_limit(cutoff_date)
 
-    # 3 APIs for FMP
+    # 2 APIs for FMP
     for i in range(len(FMP_ENDPOINTS)):
         if i == 0:
             # Balance sheet
             params = {"symbol": ticker.upper(), "limit": limit, "period": "quarter"} # limit = number of quarters
         if i == 1:
-            # Financial growth
-            params = {"symbol": ticker.upper(), "limit": limit, "period": "quarter"} # limit = number of quarters
-        if i == 2:
             # Historical grades
             params = {"symbol": ticker.upper(), "limit": limit * 15 if not DATA_MODE == LIVE_MODE else 1} # Estimate reports at 15 per quarter
 
@@ -210,23 +207,25 @@ def _get_fmp_limit(cutoff_date_str: str) -> int:
     return limit
 
 
-def _binary_search_index(dates: list, target: str) -> int:
+def _binary_search_index(dates: list, target: str) -> int | None:
     """
-    Returns index of most recent index up to target date
+    Returns index of most recent index up to target date. Assumes newest to oldest order
     """
     l, r = 0, len(dates)-1
     dt_target = dt.datetime.strptime(target, "%Y-%m-%d")
+    result = None
 
-    while l < r:
+    while l <= r:
         mid = (l+r) // 2
         dt_mid = dt.datetime.strptime(dates[mid], "%Y-%m-%d")
 
-        if (dt_target - dt_mid).days > 0:
-            r = mid
+        if dt_mid <= dt_target:
+            result = mid
+            r = mid - 1
         else:
             l = mid + 1
 
-    return l
+    return result
 
 
 def _parse_responses(responses: list, cutoff_date: str) -> defaultdict:
@@ -245,16 +244,9 @@ def _parse_responses(responses: list, cutoff_date: str) -> defaultdict:
     parsed_responses_dict["Total liabilities and total equity"] = balance_sheet["totalLiabilitiesAndTotalEquity"]
     parsed_responses_dict["Total debt"] = balance_sheet["totalDebt"]
 
-    # 2. Add financial growth data
-    financial_statement = responses[1][-1]
-    parsed_responses_dict["YoY revenue growth"] = f"{financial_statement["revenueGrowth"] * 100}%"
-    parsed_responses_dict["YoY EPS growth"] = f"{financial_statement["epsgrowth"] * 100}%"
-    parsed_responses_dict["YoY debt growth"] = f"{financial_statement["debtGrowth"] * 100}%"
-    parsed_responses_dict["Net income growth"] = f"{financial_statement["netIncomeGrowth"] * 100}%"
-
-    # 3. Latest historical ratings
-    analyst_rating_dates = [rating["date"] for rating in responses[2]]
-    analyst_ratings = responses[2][
+    # 2. Latest historical ratings
+    analyst_rating_dates = [rating["date"] for rating in responses[1]]
+    analyst_ratings = responses[1][
         _binary_search_index(analyst_rating_dates, cutoff_date)
     ]
     parsed_responses_dict["Analyst strong buys"] = analyst_ratings["analystRatingsStrongBuy"]
@@ -263,8 +255,8 @@ def _parse_responses(responses: list, cutoff_date: str) -> defaultdict:
     parsed_responses_dict["Analyst sells"] = analyst_ratings["analystRatingsSell"]
     parsed_responses_dict["Analyst strong sells"] = analyst_ratings["analystRatingsStrongSell"]
 
-    # 4. Latest stock news
-    parsed_responses_dict.update(responses[3]) # Up to 3 headlines in an array
+    # 3. Latest stock news
+    parsed_responses_dict.update(responses[2]) # Up to 3 headlines in an array
 
     return parsed_responses_dict
 
