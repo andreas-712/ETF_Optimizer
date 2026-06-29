@@ -3,6 +3,7 @@
 import datetime as dt
 import json
 import os
+import time
 from pathlib import Path
 import requests
 from dotenv import load_dotenv
@@ -15,13 +16,14 @@ load_dotenv(BACKEND_DIR / ".flaskenv")
 START_DATE = dt.date(2025, 9, 26)
 END_DATE = dt.date(2026, 3, 26)
 CHUNK_DAYS = 30
-TICKERS = ["NVDA", "AAPL", "AMZN", "GOOG", "MSFT"]
-NUM_QUARTERS = 6
+TICKERS = ["NVDA", "AAPL", "AMZN", "META", "MSFT"]
+# 2 quarters of data + starting 1 quarter before today + 1 quarter buffer
+NUM_QUARTERS = 5
 
 COLLECTION_STATES = {
-    "summaries": "Y",
-    "balance_sheets": "Y",
-    "historical_grades": "Y",
+    "summaries": "N",
+    "balance_sheets": "N",
+    "historical_grades": "N",
 }
 
 FINNHUB_URL = os.getenv("FINNHUB_URL")
@@ -29,10 +31,14 @@ FINNHUB_KEY = os.getenv("FINNHUB_KEY")
 FINNHUB_ENDPOINT = "/company-news?"
 FMP_URL = os.getenv("FMP_URL")
 FMP_KEY = os.getenv("FMP_KEY")
-OUTPUT_PATH = Path(__file__).resolve().parent / "finnhub_and_fmp_data.json"
+OUTPUT_DIR = Path(__file__).resolve().parent
+SUMMARIES_OUTPUT_PATH = OUTPUT_DIR / "finnhub_summaries.json"
+BALANCE_SHEETS_OUTPUT_PATH = OUTPUT_DIR / "fmp_balance_sheets.json"
+HISTORICAL_GRADES_OUTPUT_PATH = OUTPUT_DIR / "fmp_historical_grades.json"
 
 
 def collect_summaries() -> dict:
+    """Collect article summaries ordered from newest to oldest by date."""
     summaries_by_ticker = {ticker: {} for ticker in TICKERS}
 
     for ticker in TICKERS:
@@ -56,7 +62,13 @@ def collect_summaries() -> dict:
                 params = params,
             ).json()
 
-            for article in articles:
+            time.sleep(1.5)
+
+            for article in sorted(
+                articles,
+                key = lambda article: article["datetime"],
+                reverse = True,
+            ):
                 article_date = dt.datetime.fromtimestamp( # Convert from unix timestamp to datetime
                     article["datetime"],
                     tz = dt.timezone.utc,
@@ -68,7 +80,7 @@ def collect_summaries() -> dict:
             chunk_start = chunk_end + dt.timedelta(days = 1)
 
         summaries_by_ticker[ticker] = dict(
-            sorted(summaries_by_ticker[ticker].items())
+            sorted(summaries_by_ticker[ticker].items(), reverse = True)
         )
 
     return summaries_by_ticker
@@ -81,10 +93,12 @@ def collect_balance_sheets() -> dict:
     balance_sheets = {ticker: {} for ticker in TICKERS}
 
     for ticker in TICKERS:
-        params = {"symbol": ticker.upper(), "limit": NUM_QUARTERS, "period": "quarter"}
+        params = {"symbol": ticker.upper(), "limit": NUM_QUARTERS, "period": "quarter"} # Capped at 5 quarters
         params["apikey"] = FMP_KEY
         req = FMP_URL + FMP_ENDPOINTS[0]
         response = requests.get(req, params = params).json()
+
+        time.sleep(6)
 
         for balance_sheet in response:
             balance_sheets[ticker][balance_sheet["filingDate"]] = {
@@ -109,9 +123,11 @@ def collect_historical_grades() -> dict:
 
     for ticker in TICKERS:
         params = {
-            "symbol": ticker.upper(), "limit": NUM_QUARTERS * 20, "apikey": FMP_KEY}
+            "symbol": ticker.upper(), "limit": 10, "apikey": FMP_KEY}
         req = FMP_URL + FMP_ENDPOINTS[1]
         response = requests.get(req, params = params).json()
+        
+        time.sleep(6)
 
         for analyst_rating in response:
             historical_grades[ticker][analyst_rating["date"]] = {
@@ -130,28 +146,29 @@ def collect_historical_grades() -> dict:
 
 
 def main():
-    collected_data = {ticker: {} for ticker in TICKERS}
-
     if COLLECTION_STATES["summaries"] == "Y":
         summaries_by_ticker = collect_summaries()
-        for ticker in TICKERS:
-            collected_data[ticker]["ummaries"] = summaries_by_ticker[ticker]
+        SUMMARIES_OUTPUT_PATH.write_text(
+            json.dumps(summaries_by_ticker),
+            encoding = "utf-8",
+        )
+        print(f"Saved summaries to {SUMMARIES_OUTPUT_PATH}")
 
     if COLLECTION_STATES["balance_sheets"] == "Y":
         balance_sheets = collect_balance_sheets()
-        for ticker in TICKERS:
-            collected_data[ticker]["balance_sheets"] = balance_sheets[ticker]
+        BALANCE_SHEETS_OUTPUT_PATH.write_text(
+            json.dumps(balance_sheets),
+            encoding = "utf-8",
+        )
+        print(f"Saved balance sheets to {BALANCE_SHEETS_OUTPUT_PATH}")
 
     if COLLECTION_STATES["historical_grades"] == "Y":
         historical_grades = collect_historical_grades()
-        for ticker in TICKERS:
-            collected_data[ticker]["historical_grades"] = historical_grades[ticker]
-
-    OUTPUT_PATH.write_text(
-        json.dumps(collected_data, indent = 2),
-        encoding = "utf-8",
-    )
-    print(f"Saved batch data to {OUTPUT_PATH}")
+        HISTORICAL_GRADES_OUTPUT_PATH.write_text(
+            json.dumps(historical_grades),
+            encoding = "utf-8",
+        )
+        print(f"Saved historical grades to {HISTORICAL_GRADES_OUTPUT_PATH}")
 
 
 if __name__ == "__main__":

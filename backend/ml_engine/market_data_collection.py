@@ -20,7 +20,7 @@ load_dotenv(BACKEND_DIR / ".flaskenv")
 LIVE_MODE = "live"
 DATA_MODE = os.getenv("DATA_MODE", "backtest").lower()
 FMP_KEY = os.getenv("FMP_KEY")
-FMP_URL = os.getenv("FINANCIAL_URL")
+FMP_URL = os.getenv("FMP_URL")
 FMP_ENDPOINTS = ["balance-sheet-statement", "grades-historical"]
 FINNHUB_URL = os.getenv("FMP_URL")
 FINNHUB_KEY = os.getenv("FMP_KEY")
