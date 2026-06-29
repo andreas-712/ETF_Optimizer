@@ -40,6 +40,11 @@ backend/ml_engine/plots/
 backend/ml_engine/saved_models/
 gemini_training_data.csv
 
+# Gemini backtest data
+fmp_historical_grades.json
+fmp_balance_sheets.json
+finnhub_summaries.json
+
 # Frontend dependencies and build artifacts
 node_modules/
 .next/

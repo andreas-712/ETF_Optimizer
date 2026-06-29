@@ -1,5 +1,6 @@
 '''
-Collects historical Gemini inference ratings for ML training.
+Collects historical Gemini inference ratings for ML training
+File writes: gemini_training_data.csv
 '''
 import asyncio
 from datetime import datetime, timedelta

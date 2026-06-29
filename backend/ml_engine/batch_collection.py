@@ -1,4 +1,7 @@
-"""Collect Finnhub article summaries in 30-day batches"""
+"""
+Collects executive summaries, balance sheets and historical grades for backtesting
+File writes: finnhub_summaries.json, fmp_balance_sheets.json, fmp_historical_grades.json
+"""
 
 import datetime as dt
 import json

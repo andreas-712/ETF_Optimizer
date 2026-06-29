@@ -1,4 +1,7 @@
-# Exposes functions for training ML model on existing data
+"""
+Exposes functions for training ML model on existing data
+File writes: saved_models/{filename}.pkl
+"""
 
 import pandas as pd
 import joblib

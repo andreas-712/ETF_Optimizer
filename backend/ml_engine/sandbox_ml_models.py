@@ -1,8 +1,9 @@
-'''
-- Trains and tests models with Gemini values.
-- Outputs latest single predictions for 20, 90, 360 day windows.
-- Outputs a TSV block to log parameters and accuracy
-'''
+"""
+Trains and tests models with Gemini values
+Outputs latest single predictions for 20, 90, 360 day windows
+Outputs a TSV block to log parameters and accuracy
+File writes: plots/[sandbox_model_results.tsv, latest_predictions.tsv]
+"""
 import asyncio
 from pathlib import Path
 import sys
