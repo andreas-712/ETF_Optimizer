@@ -28,7 +28,8 @@ COLLECTION_STATES = {
     "summaries": "N",
     "balance_sheets": "N",
     "historical_grades": "N",
-    "filter_summaries": "Y"
+    "filter_summaries": "N",
+    "produce_training_batch": "N"
 }
 
 FINNHUB_URL = os.getenv("FINNHUB_URL")
@@ -42,6 +43,7 @@ SUMMARIES_OUTPUT_PATH = OUTPUT_DIR / "finnhub_summaries.json"
 BALANCE_SHEETS_OUTPUT_PATH = OUTPUT_DIR / "fmp_balance_sheets.json"
 HISTORICAL_GRADES_OUTPUT_PATH = OUTPUT_DIR / "fmp_historical_grades.json"
 FILTERED_SUMMARIES_OUTPUT_PATH = OUTPUT_DIR / "filtered_finnhub_summaries.json"
+TRAINING_BATCH_OUTPUT_PATH = OUTPUT_DIR / "training_batch.json"
 URL_PATTERN = re.compile(r"https?://\S+|www\.\S+")
 
 
@@ -131,8 +133,7 @@ def collect_historical_grades() -> dict:
     historical_grades = {ticker: {} for ticker in TICKERS}
 
     for ticker in TICKERS:
-        params = {
-            "symbol": ticker.upper(), "limit": 10, "apikey": FMP_KEY}
+        params = {"symbol": ticker.upper(), "limit": 10, "apikey": FMP_KEY}
         req = FMP_URL + FMP_ENDPOINTS[1]
         response = requests.get(req, params = params).json()
         
@@ -152,6 +153,129 @@ def collect_historical_grades() -> dict:
         )
 
     return historical_grades
+
+
+def filter_summaries() -> None:
+    company_terms = {"NVDA": ["nvidia", "nvda", "jensen huang", "gpu"],
+                     "AAPL": ["apple", "aapl", "tim cook", "john ternus", "iphone"],
+                     "MSFT": ["microsoft", "msft", "satya nadella", "azure"],
+                     "META": ["meta", "llama", "mark zuckerberg"],
+                     "AMZN": ["amazon", "amzn", "andy jassy", "jeff bezos", "aws"]}
+
+    summaries_by_ticker = json.loads(
+        SUMMARIES_OUTPUT_PATH.read_text(encoding = "utf-8")
+    )
+
+    # Go through each ticker
+    for ticker, ticker_data in summaries_by_ticker.items():
+        terms = company_terms[ticker]
+        filtered_dates = {}
+        previous_summaries = []
+
+        # Build every date from oldest to newest so missing dates can be forwarded
+        for day_offset in range(181):
+            date = (START_DATE + dt.timedelta(days = day_offset)).isoformat()
+            summaries = ticker_data["summaries"].get(date, [])
+            matching_summaries = []
+
+            # Check each summary against keywords and remove URLs
+            for summary in summaries:
+                if len(matching_summaries) >= 3: # 3 summaries per date
+                    break
+
+                cleaned_summary = URL_PATTERN.sub("", summary).strip()
+                if not 30 < len(cleaned_summary) < 600:
+                    continue
+                summary_lower = cleaned_summary.lower()
+
+                for term in terms:
+                    if term in summary_lower:
+                        if cleaned_summary not in matching_summaries:
+                            matching_summaries.append(cleaned_summary)
+                        break
+
+            current_summaries = matching_summaries.copy()
+            forwarded_count = 0
+
+            # Forward previous valid data if not enough made it through filters
+            for previous_summary in previous_summaries:
+                if len(matching_summaries) >= 3:
+                    break
+                if previous_summary not in matching_summaries:
+                    matching_summaries.append(previous_summary)
+                    forwarded_count += 1
+
+            if forwarded_count:
+                print(f"Forwarded {forwarded_count} articles for date {date}, ticker {ticker}")
+
+            filtered_dates[date] = matching_summaries
+            previous_summaries = matching_summaries
+
+        ticker_data["summaries"] = dict(
+            sorted(filtered_dates.items(), reverse = True)
+        )
+
+    FILTERED_SUMMARIES_OUTPUT_PATH.write_text(
+        json.dumps(summaries_by_ticker),
+        encoding = "utf-8",
+    )
+    print(f"Filtered summaries written to {FILTERED_SUMMARIES_OUTPUT_PATH}")
+
+def produce_training_batch() -> None:
+    """
+    Produce self-contained daily training data for each ticker
+    Balance sheets and historical grades are forwarded until newer data exists
+    """
+    filtered_summaries = json.loads(
+        FILTERED_SUMMARIES_OUTPUT_PATH.read_text(encoding = "utf-8")
+    )
+    balance_sheets = json.loads(
+        BALANCE_SHEETS_OUTPUT_PATH.read_text(encoding = "utf-8")
+    )
+    historical_grades = json.loads(
+        HISTORICAL_GRADES_OUTPUT_PATH.read_text(encoding = "utf-8")
+    )
+
+    training_batch = {}
+
+    for ticker in TICKERS:
+        training_batch[ticker] = {}
+        ticker_summaries = filtered_summaries[ticker]["summaries"]
+        ticker_balance_sheets = balance_sheets[ticker]
+        ticker_historical_grades = historical_grades[ticker]
+
+        # Get starting balance sheet
+        current_balance_sheet = ticker_balance_sheets[max(
+            date for date in ticker_balance_sheets
+            if date <= START_DATE.isoformat()
+        )]
+        # Get starting historical grade
+        current_historical_grades = ticker_historical_grades[max(
+            date for date in ticker_historical_grades
+            if date <= START_DATE.isoformat()
+        )]
+
+        for day_offset in range(181):
+            date = (START_DATE + dt.timedelta(days = day_offset)).isoformat()
+
+            # Update latest balance sheet as it becomes available
+            if date in ticker_balance_sheets:
+                current_balance_sheet = ticker_balance_sheets[date]
+            # Update latest historical grade as it becomes available
+            if date in ticker_historical_grades:
+                current_historical_grades = ticker_historical_grades[date]
+
+            training_batch[ticker][date] = {
+                "filtered_summaries": ticker_summaries[date],
+                "balance_sheet": current_balance_sheet,
+                "historical_grades": current_historical_grades,
+            }
+
+    TRAINING_BATCH_OUTPUT_PATH.write_text(
+        json.dumps(training_batch),
+        encoding = "utf-8",
+    )
+    print(f"Training batch written to {TRAINING_BATCH_OUTPUT_PATH}")
 
 
 def main():
@@ -180,70 +304,10 @@ def main():
         print(f"Saved historical grades to {HISTORICAL_GRADES_OUTPUT_PATH}")
 
     if COLLECTION_STATES["filter_summaries"] == "Y":
-        company_terms = {"NVDA": ["nvidia", "nvda", "jensen huang", "gpu"],
-                         "AAPL": ["apple", "aapl", "tim cook", "john ternus", "iphone"],
-                         "MSFT": ["microsoft", "msft", "satya nadella", "azure"],
-                         "META": ["meta", "llama", "mark zuckerberg"],
-                         "AMZN": ["amazon", "amzn", "andy jassy", "jeff bezos", "aws"]}
+        filter_summaries()
 
-        summaries_by_ticker = json.loads(
-            SUMMARIES_OUTPUT_PATH.read_text(encoding = "utf-8")
-        )
-
-        # Go through each ticker
-        for ticker, ticker_data in summaries_by_ticker.items():
-            terms = company_terms[ticker]
-            filtered_dates = {}
-            previous_summaries = []
-
-            # Build every date from oldest to newest so missing dates can be forwarded
-            for day_offset in range(181):
-                date = (START_DATE + dt.timedelta(days = day_offset)).isoformat()
-                summaries = ticker_data["summaries"].get(date, [])
-                matching_summaries = []
-
-                # Check each summary against keywords and remove URLs
-                for summary in summaries:
-                    if len(matching_summaries) >= 3: # 3 summaries per date
-                        break
-
-                    cleaned_summary = URL_PATTERN.sub("", summary).strip()
-                    if not 30 < len(cleaned_summary) < 600:
-                        continue
-                    summary_lower = cleaned_summary.lower()
-
-                    for term in terms:
-                        if term in summary_lower:
-                            if cleaned_summary not in matching_summaries:
-                                matching_summaries.append(cleaned_summary)
-                            break
-
-                current_summaries = matching_summaries.copy()
-                forwarded_count = 0
-
-                # Forward previous valid if not enough made it through filters
-                for previous_summary in previous_summaries:
-                    if len(matching_summaries) >= 3:
-                        break
-                    if previous_summary not in matching_summaries:
-                        matching_summaries.append(previous_summary)
-                        forwarded_count += 1
-
-                if forwarded_count:
-                    print(f"Forwarded {forwarded_count} articles for date {date}, ticker {ticker}")
-
-                filtered_dates[date] = matching_summaries
-                previous_summaries = matching_summaries
-
-            ticker_data["summaries"] = dict(
-                sorted(filtered_dates.items(), reverse = True)
-            )
-
-        FILTERED_SUMMARIES_OUTPUT_PATH.write_text(
-            json.dumps(summaries_by_ticker),
-            encoding = "utf-8",
-        )
-        print(f"Filtered summaries written to {FILTERED_SUMMARIES_OUTPUT_PATH}")
+    if COLLECTION_STATES["produce_training_batch"] == "Y":
+        produce_training_batch()
 
 
 if __name__ == "__main__":

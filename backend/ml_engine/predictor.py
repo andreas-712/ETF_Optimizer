@@ -1,4 +1,6 @@
-# Exposes helpers for ML model prediction data
+"""
+Exposes helpers for ML model prediction data
+"""
 
 import pandas as pd
 import numpy as np
@@ -12,12 +14,13 @@ FEATURE_COLUMNS = [
     "gemini_sentiment_score",
 ]
 
-"""
-Processes feature columns for prediction-ready data
-Params: timeline in days, dataframe with features, Kalman Filter toggle
-Returns: Processed feature columns
-"""
+
 def build_inference_features(timeline: int, df: pd.DataFrame, kalman_filter = True) -> pd.DataFrame:
+    """
+    Processes feature columns for prediction-ready data
+    Params: timeline in days, dataframe with features, Kalman Filter toggle
+    Returns: Processed feature columns
+    """
     live_df = df.copy()
     
     # 1. Kalman filter toggle
