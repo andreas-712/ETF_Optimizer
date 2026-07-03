@@ -17,6 +17,7 @@ import re
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 load_dotenv(BACKEND_DIR / ".flaskenv")
 
+SUMMARY_START_DATE = dt.date(2025, 8, 26)
 START_DATE = dt.date(2025, 9, 26) # Inclusive
 END_DATE = dt.date(2026, 3, 26) # Exclusive
 CHUNK_DAYS = 30
@@ -29,7 +30,7 @@ COLLECTION_STATES = {
     "balance_sheets": "N",
     "historical_grades": "N",
     "filter_summaries": "N",
-    "produce_training_batch": "N"
+    "produce_training_batch": "Y"
 }
 
 FINNHUB_URL = os.getenv("FINNHUB_URL")
@@ -53,7 +54,7 @@ def collect_summaries() -> dict:
     summaries_by_ticker = {ticker: {} for ticker in TICKERS}
 
     for ticker in TICKERS:
-        chunk_start = START_DATE
+        chunk_start = SUMMARY_START_DATE
 
         while chunk_start <= END_DATE:
             chunk_end = min(
@@ -173,9 +174,9 @@ def filter_summaries() -> None:
         previous_summaries = []
 
         # Build every date from oldest to newest so missing dates can be forwarded
-        for day_offset in range(181):
-            date = (START_DATE + dt.timedelta(days = day_offset)).isoformat()
-            summaries = ticker_data["summaries"].get(date, [])
+        for day_offset in range(181+31): # 31 days buffer for first month forwarding
+            date = (SUMMARY_START_DATE + dt.timedelta(days = day_offset)).isoformat()
+            summaries = ticker_data.get(date, [])
             matching_summaries = []
 
             # Check each summary against keywords and remove URLs
@@ -211,9 +212,9 @@ def filter_summaries() -> None:
             filtered_dates[date] = matching_summaries
             previous_summaries = matching_summaries
 
-        ticker_data["summaries"] = dict(
-            sorted(filtered_dates.items(), reverse = True)
-        )
+        summaries_by_ticker[ticker] = {
+            "summaries": dict(sorted(filtered_dates.items(), reverse = True))
+        }
 
     FILTERED_SUMMARIES_OUTPUT_PATH.write_text(
         json.dumps(summaries_by_ticker),
