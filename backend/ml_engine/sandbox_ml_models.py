@@ -16,8 +16,8 @@ BACKEND_DIR = Path(__file__).resolve().parents[1]
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
-from ml_engine.market_data_collection import fetch_gemini_ticker_data
-from ml_engine.gemini import fetch_ticker_data as fetch_gemini_ticker_data
+from ml_engine.market_data_collection import fetch_ticker_data
+from ml_engine.gemini import fetch_gemini_ticker_data
 from ml_engine.train import (
     build_model_feature_frame,
     build_training_frame,

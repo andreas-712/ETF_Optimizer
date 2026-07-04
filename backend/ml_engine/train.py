@@ -1,7 +1,24 @@
 """
-Exposes functions for training ML model on existing data
+Build model features and train the return and volatility predictors.
+
+Feature columns:
+    price_trend_deviation:
+        Adjusted close minus the Kalman-smoothed price. Positive
+        value means the market price is above its estimated underlying trend a
+        negative value means it is below that trend.
+    rolling_volatility:
+        Rolling standard deviation of daily percentage returns for each
+        ticker. Larger values mean the price has recently moved less consistently
+        and therefore carries more short-term movement.
+    gemini_sentiment_score
+        News relevance multiplied by polarity and urgency ranging from -100 to 100.
+        The sign represents negative or positive sentiment and the magnitude
+        represents its estimated impact on ticker value.
+
 File writes: saved_models/{filename}.pkl
 """
+
+from typing import Any
 
 import pandas as pd
 import joblib
@@ -18,6 +35,7 @@ MAX_RETURN_HALF_LIFE_DAYS = 360
 
 
 def return_half_life_days(timeline_days: int) -> int:
+    """ Return the time-series half-life weights used by the return model """
     raw_half_life = timeline_days * RETURN_HALF_LIFE_MULTIPLIER
     return max(
         MIN_RETURN_HALF_LIFE_DAYS,
@@ -25,7 +43,8 @@ def return_half_life_days(timeline_days: int) -> int:
     )
 
 
-def return_model_config(timeline_days: int) -> dict:
+def return_model_config(timeline_days: int) -> dict[str, int | float]:
+    """ Returns Gradient Boosting hyperparameters based on prediction horizon. """
     if timeline_days <= 20:
         return {
             "n_estimators": 120,
@@ -44,17 +63,22 @@ def return_model_config(timeline_days: int) -> dict:
     }
 
 
-def save_model(model, filename: str) -> Path:
+def save_model(model: Any, filename: str) -> Path:
+    """Serialize a fitted model under :data:`SAVED_MODEL_DIR`."""
     SAVED_MODEL_DIR.mkdir(parents = True, exist_ok = True)
     output_path = SAVED_MODEL_DIR / filename
     joblib.dump(model, output_path)
     return output_path
 
 
-def build_gemini_feature_frame(gemini_data: list[dict]) -> pd.DataFrame:
+def build_gemini_feature_frame(
+    gemini_data: list[dict[str, Any]],
+) -> pd.DataFrame:
     """
-    Builds the Gemini inference feature frame for overall market sentiment impact
-    Sentiment score = relevance * polarity * urgency
+    Build one validated sentiment-score row per ticker.
+    The score is relevance * polarity * urgency and ranges from -100 to 100. 
+    The input must contain one row per ticker and the columns ticker,
+    relevance, polarity, and urgency.
     """
     # 1. Checks for data integrity
     result = pd.DataFrame(gemini_data)
@@ -87,18 +111,27 @@ def build_gemini_feature_frame(gemini_data: list[dict]) -> pd.DataFrame:
     return result[["ticker", "gemini_sentiment_score"]]
 
 
-def add_gemini_inputs(df: pd.DataFrame, gemini_data) -> pd.DataFrame:
+def add_gemini_inputs(
+    df: pd.DataFrame,
+    gemini_data: list[dict[str, Any]],
+) -> pd.DataFrame:
+    """Left-join ticker-level Gemini sentiment scores onto market data."""
     gemini_features = build_gemini_feature_frame(gemini_data)
     return df.merge(gemini_features, on="ticker", how="left")
 
 
 def build_model_feature_frame(
     df: pd.DataFrame,
-    gemini_data,
+    gemini_data: list[dict[str, Any]],
     rolling_volatility_window: int = 10,
     kalman_q: float = 1e-5,
     kalman_r: float = 1e-2,
 ) -> pd.DataFrame:
+    """
+    Create chronologically ordered model features for each ticker
+    Adds the Kalman-smoothed price, daily percentage return,
+    price_trend_deviation, rolling_volatility and gemini_sentiment_score. 
+    """
     result = df.sort_values(["ticker", "date"]).copy()
     result = Kalman_Filter(Q=kalman_q, R=kalman_r).smooth_dataframe(result)
     result = add_gemini_inputs(result, gemini_data)
@@ -118,12 +151,18 @@ def build_model_feature_frame(
 def build_training_frame(
     df: pd.DataFrame,
     horizon_days: int,
-    gemini_data: list[dict],
+    gemini_data: list[dict[str, Any]],
     feature_columns: list[str],
     rolling_volatility_window: int = 10,
     kalman_q: float = 1e-5,
     kalman_r: float = 1e-2,
 ) -> pd.DataFrame:
+    """
+    Adds future outcomes and removes rows that cannot be used for training.
+    future_return_outcome is the percentage price change over the requested
+    horizon. future_volatility_outcome is the standard deviation of daily
+    returns over that future horizon.
+    """
     result = build_model_feature_frame(
         df,
         gemini_data,
@@ -150,12 +189,8 @@ def train_return_predictor(
     feature_columns: list[str],
     target_column: str,
     timeline_days: int,
-):
-    """
-    Trains a sequential Gradient Boosting model.
-    Captures asset momentum/inflection signals based on 
-    Kalman and Gemini features.
-    """
+) -> GradientBoostingRegressor:
+    """ Fits a time-series-weighted Gradient Boosting return predictor """
 
     # Extract input and output columns
     X = df[feature_columns]
@@ -188,12 +223,8 @@ def train_volatility_predictor(
     feature_columns: list[str],
     target_column: str,
     timeline_days: int,
-):
-    """
-    Trains a Random Forest Regression model.
-    Predicts market volatility / risk for specified assets
-    based on Kalman and Gemini features.
-    """
+) -> RandomForestRegressor:
+    """ Fits a time-series-weighted Random Forest volatility predictor """
 
     X = df[feature_columns]
     y = df[target_column]

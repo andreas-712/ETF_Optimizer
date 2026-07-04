@@ -10,8 +10,11 @@ import time
 from pathlib import Path
 import requests
 from dotenv import load_dotenv
-from ml_engine.market_data_collection import FMP_ENDPOINTS
 import re
+
+from ml_engine.market_data_collection import FMP_ENDPOINTS
+from ml_engine.gemini import BACKTESTING_PROMPT
+from ml_engine.gemini_data_collection import PREDICTION_HORIZON_DAYS
 
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
@@ -44,9 +47,8 @@ SUMMARIES_OUTPUT_PATH = OUTPUT_DIR / "finnhub_summaries.json"
 BALANCE_SHEETS_OUTPUT_PATH = OUTPUT_DIR / "fmp_balance_sheets.json"
 HISTORICAL_GRADES_OUTPUT_PATH = OUTPUT_DIR / "fmp_historical_grades.json"
 FILTERED_SUMMARIES_OUTPUT_PATH = OUTPUT_DIR / "filtered_finnhub_summaries.json"
-TRAINING_BATCH_OUTPUT_PATH = OUTPUT_DIR / "training_batch.json"
+BATCH_INFERENCE_DATA_OUTPUT_PATH = OUTPUT_DIR / "batch_requests.jsonl"
 URL_PATTERN = re.compile(r"https?://\S+|www\.\S+")
-
 
 
 def collect_summaries() -> dict:
@@ -225,58 +227,71 @@ def filter_summaries() -> None:
 def produce_training_batch() -> None:
     """
     Produce self-contained daily training data for each ticker
-    Balance sheets and historical grades are forwarded until newer data exists
+    All data is forwarded for fill dates until newer data exists
+    Follows GCP Cloud Storage batch format in jsonl
     """
-    filtered_summaries = json.loads(
-        FILTERED_SUMMARIES_OUTPUT_PATH.read_text(encoding = "utf-8")
-    )
-    balance_sheets = json.loads(
-        BALANCE_SHEETS_OUTPUT_PATH.read_text(encoding = "utf-8")
-    )
-    historical_grades = json.loads(
-        HISTORICAL_GRADES_OUTPUT_PATH.read_text(encoding = "utf-8")
-    )
+    with open(BATCH_INFERENCE_DATA_OUTPUT_PATH, "w") as batch_file:
+        filtered_summaries = json.loads(
+            FILTERED_SUMMARIES_OUTPUT_PATH.read_text(encoding = "utf-8")
+        )
+        balance_sheets = json.loads(
+            BALANCE_SHEETS_OUTPUT_PATH.read_text(encoding = "utf-8")
+        )
+        historical_grades = json.loads(
+            HISTORICAL_GRADES_OUTPUT_PATH.read_text(encoding = "utf-8")
+        )
 
-    training_batch = {}
+        for ticker in TICKERS:
+            ticker_summaries = filtered_summaries[ticker]["summaries"]
+            ticker_balance_sheets = balance_sheets[ticker]
+            ticker_historical_grades = historical_grades[ticker]
 
-    for ticker in TICKERS:
-        training_batch[ticker] = {}
-        ticker_summaries = filtered_summaries[ticker]["summaries"]
-        ticker_balance_sheets = balance_sheets[ticker]
-        ticker_historical_grades = historical_grades[ticker]
+            # Get starting balance sheet
+            current_balance_sheet = ticker_balance_sheets[max(
+                date for date in ticker_balance_sheets
+                if date <= START_DATE.isoformat()
+            )]
+            # Get starting historical grade
+            current_historical_grades = ticker_historical_grades[max(
+                date for date in ticker_historical_grades
+                if date <= START_DATE.isoformat()
+            )]
 
-        # Get starting balance sheet
-        current_balance_sheet = ticker_balance_sheets[max(
-            date for date in ticker_balance_sheets
-            if date <= START_DATE.isoformat()
-        )]
-        # Get starting historical grade
-        current_historical_grades = ticker_historical_grades[max(
-            date for date in ticker_historical_grades
-            if date <= START_DATE.isoformat()
-        )]
+            for day_offset in range(181):
+                date = (START_DATE + dt.timedelta(days = day_offset)).isoformat()
 
-        for day_offset in range(181):
-            date = (START_DATE + dt.timedelta(days = day_offset)).isoformat()
+                # Update latest balance sheet as it becomes available
+                if date in ticker_balance_sheets:
+                    current_balance_sheet = ticker_balance_sheets[date]
+                # Update latest historical grade as it becomes available
+                if date in ticker_historical_grades:
+                    current_historical_grades = ticker_historical_grades[date]
 
-            # Update latest balance sheet as it becomes available
-            if date in ticker_balance_sheets:
-                current_balance_sheet = ticker_balance_sheets[date]
-            # Update latest historical grade as it becomes available
-            if date in ticker_historical_grades:
-                current_historical_grades = ticker_historical_grades[date]
+                for timeline_days in PREDICTION_HORIZON_DAYS:
+                    # temp = 0.0 (no extra conversational wording and minimize hallucinations), maxOutputTokens = 50 (strict JSON object format expected)
+                    single_inference = {
+                        "request": {
+                        "systemInstruction": {
+                            "role": "system",
+                            "parts": [{"text": BACKTESTING_PROMPT}]
+                            },
+                        "contents": [
+                                {"role": "user",
+                                "parts": [{"text": f"Extract data for {ticker} using only information available on or before {date}. Base your prediction on the following provided company metrics and executive summaries : \"Latest summaries\": {ticker_summaries[date]}, \"latest balance sheet\": {current_balance_sheet}, \"latest grades\": {current_historical_grades}. Score the expected direction and catalyst strength over approximately {timeline_days} days after {date}."}]
+                                }
+                            ],
+                        "generationConfig": {
+                            "temperature": 0.0,
+                            "maxOutputTokens": 50,
+                            "responseMimeType": "application/json"
+                            }
+                        }
+                    }
 
-            training_batch[ticker][date] = {
-                "filtered_summaries": ticker_summaries[date],
-                "balance_sheet": current_balance_sheet,
-                "historical_grades": current_historical_grades,
-            }
+                    json_string = json.dumps(single_inference)
+                    batch_file.write(json_string + "\n")
 
-    TRAINING_BATCH_OUTPUT_PATH.write_text(
-        json.dumps(training_batch),
-        encoding = "utf-8",
-    )
-    print(f"Training batch written to {TRAINING_BATCH_OUTPUT_PATH}")
+        print(f"Batch inference data written to {BATCH_INFERENCE_DATA_OUTPUT_PATH}")
 
 
 def main():

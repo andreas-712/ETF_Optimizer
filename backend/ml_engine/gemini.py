@@ -25,9 +25,9 @@ GEMINI_USE_SEARCH = os.getenv("GEMINI_USE_SEARCH", "false").lower() == "true"
 client = genai.Client(api_key=GEMINI_API_KEY)
 grounding_tool = types.Tool(google_search=types.GoogleSearch())
 
-BACKTESTING_PROMPT = """You are a quantitative financial data extractor for historical backtesting. Analyze only the provided article texts for the given stock ticker and requested date, then return one aggregate score for the requested prediction timeline.
+BACKTESTING_PROMPT = """You are a quantitative financial data extractor for historical backtesting. Analyze only the provided article texts, balance sheets, and historical grades for the given stock ticker and requested date, then return one aggregate score for the requested prediction timeline.
 
-Use only the provided article texts as your reference for market signals and information. Do not use your general knowledge about the company, ticker, market, earnings, products, lawsuits, analyst updates, or events unless that information is explicitly stated in the provided article texts. If the provided article texts do not contain enough evidence, return conservative low relevance and urgency scores instead of filling gaps from memory.
+Use only the provided article texts and company metrics as your reference for market signals and information. Do not use your general knowledge about the company, ticker, market, earnings, products, lawsuits, analyst updates, or events unless that information is explicitly stated in the provided article texts. If the provided article texts do not contain sufficient signals, return conservative low relevance and urgency scores.
 
 Return exactly one strict JSON object with exactly these keys:
 {
@@ -37,15 +37,14 @@ Return exactly one strict JSON object with exactly these keys:
 }
 
 Scoring rules:
-1. relevance: 0 to 10 whole number increments. Higher means the available information is more directly impactful to the ticker's performance.
+1. relevance: 0 to 10 whole number increments. High means the available information is directly impactful to the ticker's performance.
 2. polarity: -1 or 1. Negative means bearish, positive means bullish.
-3. urgency: 0 to 10 whole number increments. Higher means the catalyst is more likely to matter to the ticker's price inside the requested timeline.
+3. urgency: 0 to 10 whole number increments. Higher means the catalyst is more likely to cause price changes for the given ticker over the requested timeline.
 
 Calibration rules:
-1. Scores of 9 or 10 is rare. Use them only for unusually strong, company-moving information with clear relevance to the requested timeline. Scores of 0 or 1 indicate no visible headwinds or tailwinds for price movement.
+1. Scores of 9 or 10 is rare. Use them only for company moving, absolutely compelling information with clear relevance to the requested timeline. Scores of 0 or 1 indicate minimal visible headwinds or tailwinds for price movement.
 2. A major scheduled event can be highly relevant without being bullish. Score polarity from expected market reaction, not from the company's general importance or brand strength. 
-Do not mention or rely on actual stock price movement, returns, or market reaction after the requested date. Score only what a market participant could infer before the future window begins.
-3. If the evidence is mixed, expectation-heavy, already priced in, or mostly speculative, choose conservative relevance and urgency scores.
+3. If the evidence is mixed, expectation-heavy, already priced in, or mostly speculative, choose conservative urgency scores (near 0).
 4. For longer timelines, reduce urgency unless the catalyst is likely to keep affecting the stock throughout most of the requested window.
 
 Aggregate all relevant events into one final score. Do not return event lists, nested objects, arrays, explanations, markdown, ticker, date, or any extra keys."""
