@@ -1,6 +1,6 @@
 """
-Collects executive summaries, balance sheets and historical grades for backtesting
-File writes: batch_data / [finnhub_summaries.json, fmp_balance_sheets.json, fmp_historical_grades.json]
+Collects numerical data, summaries, balance sheets and historical grades for backtesting
+File writes under batch_data/
 """
 
 import datetime as dt
@@ -12,9 +12,8 @@ import requests
 from dotenv import load_dotenv
 import re
 
-from ml_engine.market_data_collection import FMP_ENDPOINTS
+from ml_engine.market_data_collection import fetch_numerical_ticker_data
 from ml_engine.gemini import BACKTESTING_PROMPT
-from ml_engine.gemini_data_collection import PREDICTION_HORIZON_DAYS
 
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
@@ -22,18 +21,23 @@ load_dotenv(BACKEND_DIR / ".flaskenv")
 
 SUMMARY_START_DATE = dt.date(2025, 8, 26)
 START_DATE = dt.date(2025, 9, 26) # Inclusive
+NUMERICAL_START_DATE = dt.date(2025, 9, 11) # 11 trading days before START_DATE
 END_DATE = dt.date(2026, 3, 26) # Exclusive
+NUMERICAL_END_DATE = dt.date(2026, 6, 26) # Exclusive
 CHUNK_DAYS = 30
 TICKERS = ["NVDA", "AAPL", "AMZN", "META", "MSFT"]
+PREDICTION_HORIZON_DAYS = [3, 20, 90]
+FMP_ENDPOINTS = ["balance-sheet-statement", "grades-historical"]
 # 2 quarters of data + starting 1 quarter before today + 1 quarter buffer
 NUM_QUARTERS = 5
 
 COLLECTION_STATES = {
+    "numerical_data": "Y",
     "summaries": "N",
     "balance_sheets": "N",
     "historical_grades": "N",
     "filter_summaries": "N",
-    "produce_training_batch": "Y"
+    "produce_training_batch": "N"
 }
 
 FINNHUB_URL = os.getenv("FINNHUB_URL")
@@ -46,13 +50,28 @@ OUTPUT_DIR.mkdir(exist_ok=True)
 SUMMARIES_OUTPUT_PATH = OUTPUT_DIR / "finnhub_summaries.json"
 BALANCE_SHEETS_OUTPUT_PATH = OUTPUT_DIR / "fmp_balance_sheets.json"
 HISTORICAL_GRADES_OUTPUT_PATH = OUTPUT_DIR / "fmp_historical_grades.json"
+NUMERICAL_DATA_OUTPUT_PATH = OUTPUT_DIR / "numerical_data.json"
 FILTERED_SUMMARIES_OUTPUT_PATH = OUTPUT_DIR / "filtered_finnhub_summaries.json"
 BATCH_INFERENCE_DATA_OUTPUT_PATH = OUTPUT_DIR / "batch_requests.jsonl"
 URL_PATTERN = re.compile(r"https?://\S+|www\.\S+")
 
 
+def collect_numerical_data() -> list[dict]:
+    numerical_df = fetch_numerical_ticker_data(
+        TICKERS,
+        start_date = NUMERICAL_START_DATE.isoformat(),
+        end_date = NUMERICAL_END_DATE.isoformat()
+    )
+    if numerical_df.empty:
+        raise RuntimeError("No numerical market data was returned by yfinance")
+    numerical_df["date"] = numerical_df["date"].astype(str)
+    return numerical_df.to_dict(orient = "records")
+
+
 def collect_summaries() -> dict:
-    """Collect article summaries ordered from newest to oldest by date."""
+    """
+    Collect article summaries ordered from newest to oldest by date
+    """
     summaries_by_ticker = {ticker: {} for ticker in TICKERS}
 
     for ticker in TICKERS:
@@ -61,13 +80,13 @@ def collect_summaries() -> dict:
         while chunk_start <= END_DATE:
             chunk_end = min(
                 chunk_start + dt.timedelta(days=CHUNK_DAYS - 1),
-                END_DATE,
+                END_DATE
             )
             params = {
                 "symbol": ticker,
                 "from": chunk_start.isoformat(),
                 "to": chunk_end.isoformat(),
-                "token": FINNHUB_KEY,
+                "token": FINNHUB_KEY
             }
 
             print(f"Fetching {ticker}: {chunk_start} to {chunk_end}")
@@ -81,7 +100,7 @@ def collect_summaries() -> dict:
             for article in sorted(
                 articles,
                 key = lambda article: article["datetime"],
-                reverse = True,
+                reverse = True
             ):
                 article_date = dt.datetime.fromtimestamp( # Convert from unix timestamp to datetime
                     article["datetime"],
@@ -107,8 +126,7 @@ def collect_balance_sheets() -> dict:
     balance_sheets = {ticker: {} for ticker in TICKERS}
 
     for ticker in TICKERS:
-        params = {"symbol": ticker.upper(), "limit": NUM_QUARTERS, "period": "quarter"} # Capped at 5 quarters
-        params["apikey"] = FMP_KEY
+        params = {"symbol": ticker.upper(), "limit": NUM_QUARTERS, "period": "quarter", "apikey": FMP_KEY} # Capped at 5 quarters
         req = FMP_URL + FMP_ENDPOINTS[0]
         response = requests.get(req, params = params).json()
 
@@ -197,7 +215,6 @@ def filter_summaries() -> None:
                             matching_summaries.append(cleaned_summary)
                         break
 
-            current_summaries = matching_summaries.copy()
             forwarded_count = 0
 
             # Forward previous valid data if not enough made it through filters
@@ -268,7 +285,7 @@ def produce_training_batch() -> None:
                     current_historical_grades = ticker_historical_grades[date]
 
                 for timeline_days in PREDICTION_HORIZON_DAYS:
-                    # temp = 0.0 (no extra conversational wording and minimize hallucinations), maxOutputTokens = 50 (strict JSON object format expected)
+                    # temp = 0.0 (no extra conversational wording and minimize hallucinations)
                     single_inference = {
                         "request": {
                         "systemInstruction": {
@@ -277,12 +294,12 @@ def produce_training_batch() -> None:
                             },
                         "contents": [
                                 {"role": "user",
-                                "parts": [{"text": f"Extract data for {ticker} using only information available on or before {date}. Base your prediction on the following provided company metrics and executive summaries : \"Latest summaries\": {ticker_summaries[date]}, \"latest balance sheet\": {current_balance_sheet}, \"latest grades\": {current_historical_grades}. Score the expected direction and catalyst strength over approximately {timeline_days} days after {date}."}]
+                                "parts": [{"text": f"Extract data for ticker {ticker} using only information available on or before {date}. Set prediction_horizon_days to {timeline_days}. Base your prediction on the following provided company metrics and executive summaries : \"Latest summaries\": {ticker_summaries[date]}, \"latest balance sheet\": {current_balance_sheet}, \"latest grades\": {current_historical_grades}. Score the expected direction and catalyst strength over approximately {timeline_days} days after {date}."}]
                                 }
                             ],
                         "generationConfig": {
                             "temperature": 0.0,
-                            "maxOutputTokens": 50,
+                            "maxOutputTokens": 100,
                             "responseMimeType": "application/json"
                             }
                         }
@@ -295,6 +312,14 @@ def produce_training_batch() -> None:
 
 
 def main():
+    if COLLECTION_STATES["numerical_data"] == "Y":
+        numerical_data = collect_numerical_data()
+        NUMERICAL_DATA_OUTPUT_PATH.write_text(
+            json.dumps(numerical_data),
+            encoding = "utf-8"
+        )
+        print(f"Saved numerical data to {NUMERICAL_DATA_OUTPUT_PATH}")
+
     if COLLECTION_STATES["summaries"] == "Y":
         summaries_by_ticker = collect_summaries()
         SUMMARIES_OUTPUT_PATH.write_text(

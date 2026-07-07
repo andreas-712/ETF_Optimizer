@@ -3,28 +3,9 @@ Collects market data for tickers
 Currently uses Financial Modeling Prep (FMP) API for market news
 '''
 
-import os
-from pathlib import Path
 import yfinance as yf
 import pandas as pd
 import datetime as dt
-from zoneinfo import ZoneInfo
-import requests
-from dotenv import load_dotenv
-import math
-from collections import defaultdict
-
-BACKEND_DIR = Path(__file__).resolve().parents[1]
-load_dotenv(BACKEND_DIR / ".flaskenv")
-
-LIVE_MODE = "live"
-DATA_MODE = os.getenv("DATA_MODE", "backtest").lower()
-FMP_KEY = os.getenv("FMP_KEY")
-FMP_URL = os.getenv("FMP_URL")
-FMP_ENDPOINTS = ["balance-sheet-statement", "grades-historical"]
-FINNHUB_URL = os.getenv("FMP_URL")
-FINNHUB_KEY = os.getenv("FMP_KEY")
-FINNHUB_ENDPOINT = "/company-news?"
 
 
 def _as_series(column_data):
@@ -36,19 +17,15 @@ def _as_series(column_data):
     return column_data
 
 
-def fetch_ticker_data(tickers: list, lookback_years: int) -> pd.DataFrame:
+def fetch_numerical_ticker_data(
+    tickers: list,
+    start_date: str,
+    end_date: str
+) -> pd.DataFrame:
     """
     Fetches daily market data times. Standardized to EST
     """
-    print(f"Fetching {lookback_years} years of data for: {tickers}")
-
-    # Use NY time
-    market_timezone = ZoneInfo("America/New_York")
-    ny_today = dt.datetime.now(market_timezone)
-
-    # Calculate lookback window
-    end_date = ny_today.strftime('%Y-%m-%d')
-    start_date = (ny_today - dt.timedelta(days = lookback_years * 365)).strftime('%Y-%m-%d')
+    print(f"Fetching numerical data from {start_date} to {end_date} for: {tickers}")
 
     compiled_records = []
 
@@ -94,117 +71,64 @@ def fetch_ticker_data(tickers: list, lookback_years: int) -> pd.DataFrame:
     return pd.DataFrame() # Empty data frame on failure
 
 
-def fetch_ticker_summaries(ticker: str, horizon_days: int, cutoff_date: str) -> dict:
+def fetch_ticker_gemini_inputs(ticker: str) -> dict:
     """
-    Returns data and executive summaries for articles about the given ticker.
+    Returns the latest balance sheet, analyst recommendations, and news for a ticker
     """
-    cutoff = pd.to_datetime(cutoff_date).date()
-    start_date = cutoff - dt.timedelta(days=horizon_days)
-    parsed_data_text = ""
+    ticker_data = yf.Ticker(ticker)
     responses = []
 
-    if DATA_MODE == LIVE_MODE:
-        limit = 1
-    else:
-        limit = _get_fmp_limit(cutoff_date)
+    responses.append(
+        ticker_data.get_balance_sheet(
+            as_dict = False,
+            pretty = False,
+            freq = "quarterly"
+        )
+    )
+    responses.append(ticker_data.get_recommendations(as_dict = False))
+    responses.append(ticker_data.get_news(count = 8, tab = "news"))
 
-    # 2 APIs for FMP
-    for i in range(len(FMP_ENDPOINTS)):
-        if i == 0:
-            # Balance sheet
-            params = {"symbol": ticker.upper(), "limit": limit, "period": "quarter"} # limit = number of quarters
-        if i == 1:
-            # Historical grades
-            params = {"symbol": ticker.upper(), "limit": limit * 15 if not DATA_MODE == LIVE_MODE else 1} # Estimate reports at 15 per quarter
-
-        params["apikey"] = FMP_KEY
-        req = FMP_URL + FMP_ENDPOINTS[i]
-        responses.append(requests.get(req, params = params).json())
-
-    # Fetch stock news data
-    if DATA_MODE == LIVE_MODE:
-        responses.append(_fetch_live_fundamentals(ticker))
-    else:
-        responses.append(_fetch_historical_fundamentals(ticker, cutoff_date))
-
-    parsed_data_text = _parse_responses(responses, cutoff_date)
-
-    return parsed_data_text
+    return _parse_responses(responses)
 
 
-def _fetch_live_fundamentals(ticker: str, count: int = 3) -> list:
+def _parse_responses(responses: list) -> dict:
     """
-    Fetches fundamentals for live inference using using yfinance API
+    Returns a parsed dict for direct extraction for inference
     """
-    try:
-        tick = yf.Ticker(ticker)
-        articles = tick.news
-        summaries = [a.get("title") for a in articles[:count] if a.get("title")] # Get latest 3 articles
-        return summaries
+    parsed_responses_dict = {}
 
-    except Exception as e:
-        print(f"Failed to fetch article summaries for ticker {ticker}: {e}")
-        return []
+    # 1. Latest Balance Sheet Data (iloc[0] grabs most recent / leftmost col)
+    balance_sheet = responses[0]
 
-    
-# EDIT: ONLY RETURN LATEST 3 ARTICLES SUMMARIES IN LIST: "summary" field in list of JSON objects per article
-def _fetch_historical_fundamentals(ticker: str, cutoff_date_str: str) -> list:
-    """
-    Fetches historical fundamentals for backtesting using Finnhub API
-    """
-    cutoff_date = dt.datetime.strptime(cutoff_date_str, "%Y-%m-%d").date()
-    start_date = cutoff_date - dt.timedelta(days = 30)
+    parsed_responses_dict["Cash and short term investments"] = balance_sheet.loc[
+        "Cash Cash Equivalents And Short Term Investments"
+    ].iloc[0]
+    parsed_responses_dict["Total current assets"] = balance_sheet.loc[
+        "Current Assets"
+    ].iloc[0]
+    parsed_responses_dict["Total liabilities and total equity"] = balance_sheet.loc[
+        "Total Liabilities Net Minority Interest"
+    ].iloc[0]
+    parsed_responses_dict["Total debt"] = balance_sheet.loc["Total Debt"].iloc[0]
 
-    start = start_date.strftime("%Y-%m-%d")
-    to = cutoff_date.strftime("%Y-%m-%d")
+    # 2. Latest analyst ratings
+    analyst_ratings = responses[1]
 
-    params = {"symbol": ticker, "from": start, "to": to, "token": FINNHUB_KEY}
+    # Filter for the current live period (0m) and convert to a dict
+    current_ratings = analyst_ratings[analyst_ratings["period"] == "0m"].iloc[0]
 
-    try:
-        print(f"Querying Finnhub for company news...")
+    parsed_responses_dict["Analyst strong buys"] = current_ratings["strongBuy"]
+    parsed_responses_dict["Analyst buys"] = current_ratings["buy"]
+    parsed_responses_dict["Analyst holds"] = current_ratings["hold"]
+    parsed_responses_dict["Analyst sells"] = current_ratings["sell"]
+    parsed_responses_dict["Analyst strong sells"] = current_ratings["strongSell"]
 
-        # Query Finnhub API
-        response = requests.get(FINNHUB_URL + FINNHUB_ENDPOINT, params=params)
+    # 3. Latest stock news
+    parsed_responses_dict["News summaries"] = [
+        "Publisher:" + article["publisher"] + "." + article["title"] for article in responses[2][:8]
+    ]
 
-        if response.status_code == 200:
-            news_data = response.json()
-            print(f"Retrieved {len(news_data)} articles")
-            latest_articles = sorted(
-                news_data,
-                key = lambda article: article["datetime"],
-                reverse = True # Unix timestamp, larger = newer
-            )
-            return [article["summary"] for article in latest_articles[:3]]
-
-        elif response.status_code == 429:
-            print("429 Error: Burst rate hit")
-
-        else:
-            print(f"Error {response.status_code}: {response.text}")
-
-    except Exception as e:
-        print(f"Request failed: {e}")
-
-    return []
-
-
-def _get_fmp_limit(cutoff_date_str: str) -> int:
-    """
-    Calculates the limit parameter for querying quarterly statements for backtesting
-    """
-    now = dt.datetime.now(dt.timezone.utc).date()
-    cutoff_date = dt.datetime.strptime(cutoff_date_str, "%Y-%m-%d").date()
-
-    delta_days = (now - cutoff_date).days
-    if delta_days <= 0:
-        print(f"Error, returned {delta_days} days")
-        return 1 # Default to latest report
-    
-    # Get the latest n reports
-    days_per_quarter = 91.25
-    limit = math.ceil(delta_days / days_per_quarter) + 1
-
-    return limit
+    return parsed_responses_dict
 
 
 def _binary_search_index(dates: list, target: str) -> int | None:
@@ -226,65 +150,3 @@ def _binary_search_index(dates: list, target: str) -> int | None:
             l = mid + 1
 
     return result
-
-
-def _parse_responses(responses: list, cutoff_date: str) -> defaultdict:
-    """
-    Returns a parsed, prompt-ready dict for inference
-    """
-    parsed_responses_dict = defaultdict(str)
-
-    # For backtesting, -1 indexes oldest (valid) entry
-    # For live testing, -1 indexes the only entry
-
-    # 1. Add balance sheet data
-    balance_sheet = responses[0][-1]
-    parsed_responses_dict["Cash and short term investments"] = balance_sheet["cashAndShortTermInvestments"]
-    parsed_responses_dict["Total current assets"] = balance_sheet["totalCurrentAssets"]
-    parsed_responses_dict["Total liabilities and total equity"] = balance_sheet["totalLiabilitiesAndTotalEquity"]
-    parsed_responses_dict["Total debt"] = balance_sheet["totalDebt"]
-
-    # 2. Latest historical ratings
-    analyst_rating_dates = [rating["date"] for rating in responses[1]]
-    analyst_ratings = responses[1][
-        _binary_search_index(analyst_rating_dates, cutoff_date)
-    ]
-    parsed_responses_dict["Analyst strong buys"] = analyst_ratings["analystRatingsStrongBuy"]
-    parsed_responses_dict["Analyst buys"] = analyst_ratings["analystRatingsBuy"]
-    parsed_responses_dict["Analyst holds"] = analyst_ratings["analystRatingsHold"]
-    parsed_responses_dict["Analyst sells"] = analyst_ratings["analystRatingsSell"]
-    parsed_responses_dict["Analyst strong sells"] = analyst_ratings["analystRatingsStrongSell"]
-
-    # 3. Latest stock news
-    parsed_responses_dict.update(responses[2]) # Up to 3 headlines in an array
-
-    return parsed_responses_dict
-
-# EDIT: RETURN ALL ARTICLES SUMMARIES IN LIST: "summary" field in list of JSON objects per article
-def fetch_time_sliced_fundamentals(ticker: str, start_date_str: str, cutoff_date_str) -> list:
-    """
-    Fetches historical fundamentals from given start and end dates from Finnhub API
-    """
-    params = {"symbol": ticker, "from": start_date_str, "to": cutoff_date_str, "token": FINNHUB_KEY}
-
-    try:
-        print(f"Querying Finnhub for company news...")
-
-        # Query Finnhub API
-        response = requests.get(FINNHUB_URL + FINNHUB_ENDPOINT, params=params)
-
-        if response.status_code == 200:
-            news_data = response.json()
-            print(f"Retrieved {len(news_data)} articles")
-            return [article["summary"] for article in news_data]
-
-        elif response.status_code == 429:
-            print("429 Error: Burst rate hit")
-
-        else:
-            print(f"Error {response.status_code}: {response.text}")
-
-    except Exception as e:
-        print(f"Request failed: {e}")
-        
-    return []

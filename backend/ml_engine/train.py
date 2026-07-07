@@ -3,7 +3,7 @@ Build model features and train the return and volatility predictors.
 
 Feature columns:
     price_trend_deviation:
-        Adjusted close minus the Kalman-smoothed price. Positive
+        Adjusted close minus the rolling mean price. Positive
         value means the market price is above its estimated underlying trend a
         negative value means it is below that trend.
     rolling_volatility:
@@ -30,41 +30,49 @@ from math_engine.Kalman_Filter import Kalman_Filter
 
 SAVED_MODEL_DIR = Path(__file__).resolve().parent / "saved_models"
 RETURN_HALF_LIFE_MULTIPLIER = 2
-MIN_RETURN_HALF_LIFE_DAYS = 30
-MAX_RETURN_HALF_LIFE_DAYS = 360
+MIN_RETURN_HALF_LIFE_DAYS = 5
+MAX_RETURN_HALF_LIFE_DAYS = 180
 
 
 def return_half_life_days(timeline_days: int) -> int:
-    """ Return the time-series half-life weights used by the return model """
+    """Return the time-series half-life weights used by the return model"""
     raw_half_life = timeline_days * RETURN_HALF_LIFE_MULTIPLIER
     return max(
         MIN_RETURN_HALF_LIFE_DAYS,
-        min(raw_half_life, MAX_RETURN_HALF_LIFE_DAYS),
+        min(raw_half_life, MAX_RETURN_HALF_LIFE_DAYS)
     )
 
 
 def return_model_config(timeline_days: int) -> dict[str, int | float]:
-    """ Returns Gradient Boosting hyperparameters based on prediction horizon. """
-    if timeline_days <= 20:
+    """Returns Gradient Boosting hyperparameters based on prediction horizon."""
+    if timeline_days == 5:
         return {
-            "n_estimators": 120,
-            "learning_rate": 0.10,
+            "n_estimators": 130,
+            "learning_rate": 0.13
         }
 
-    if timeline_days >= 360:
+    if timeline_days == 20:
+        return {
+            "n_estimators": 110,
+            "learning_rate": 0.11
+        }
+
+
+    if timeline_days == 90:
         return {
             "n_estimators": 80,
-            "learning_rate": 0.08,
+            "learning_rate": 0.08
         }
-
+    
+    # Default
     return {
         "n_estimators": 100,
-        "learning_rate": 0.09,
+        "learning_rate": 0.1
     }
 
 
 def save_model(model: Any, filename: str) -> Path:
-    """Serialize a fitted model under :data:`SAVED_MODEL_DIR`."""
+    """Serialize a fitted model under : data : SAVED_MODEL_DIR."""
     SAVED_MODEL_DIR.mkdir(parents = True, exist_ok = True)
     output_path = SAVED_MODEL_DIR / filename
     joblib.dump(model, output_path)
@@ -73,23 +81,35 @@ def save_model(model: Any, filename: str) -> Path:
 
 def build_gemini_feature_frame(
     gemini_data: list[dict[str, Any]],
+    horizon_days: int
 ) -> pd.DataFrame:
     """
-    Build one validated sentiment-score row per ticker.
+    Build one validated sentiment-score row per ticker and date.
     The score is relevance * polarity * urgency and ranges from -100 to 100. 
-    The input must contain one row per ticker and the columns ticker,
-    relevance, polarity, and urgency.
+    The input must contain one row per ticker, date, and prediction horizon.
     """
     # 1. Checks for data integrity
     result = pd.DataFrame(gemini_data)
-    required_columns = {"ticker", "relevance", "polarity", "urgency"}
+    required_columns = {
+        "ticker",
+        "date",
+        "prediction_horizon_days",
+        "relevance",
+        "polarity",
+        "urgency"
+    }
     missing_columns = required_columns - set(result.columns)
     if missing_columns:
-        raise ValueError(f"Gemini data is missing columns: {sorted(missing_columns)}")
+        raise ValueError(f"Gemini data is missing columns: {missing_columns}")
 
-    duplicate_tickers = result.loc[result["ticker"].duplicated(), "ticker"].unique()
-    if len(duplicate_tickers) > 0:
-        raise ValueError(f"Gemini data has duplicate tickers: {sorted(duplicate_tickers)}")
+    result = result[
+        result["prediction_horizon_days"] == horizon_days
+    ].copy()
+    result["date"] = pd.to_datetime(result["date"]).dt.date
+
+    duplicate_rows = result.duplicated(subset = ["ticker", "date"])
+    if duplicate_rows.any():
+        raise ValueError("Gemini data has duplicate ticker/date rows")
 
     allowed_scores = {
         "relevance": {i for i in range(0, 11)},
@@ -108,44 +128,124 @@ def build_gemini_feature_frame(
         result["relevance"] * result["polarity"] * result["urgency"]
     )
 
-    return result[["ticker", "gemini_sentiment_score"]]
+    return result[["ticker", "date", "gemini_sentiment_score"]]
 
 
 def add_gemini_inputs(
     df: pd.DataFrame,
     gemini_data: list[dict[str, Any]],
+    horizon_days: int
 ) -> pd.DataFrame:
-    """Left-join ticker-level Gemini sentiment scores onto market data."""
-    gemini_features = build_gemini_feature_frame(gemini_data)
-    return df.merge(gemini_features, on="ticker", how="left")
+    """Join daily Gemini sentiment scores onto market data"""
+    gemini_features = build_gemini_feature_frame(gemini_data, horizon_days)
+    return df.merge(gemini_features, on=["ticker", "date"], how = "left")
 
 
 def build_model_feature_frame(
     df: pd.DataFrame,
     gemini_data: list[dict[str, Any]],
+    horizon_days: int,
+    prediction_window_start = None, # Should be now for live
     rolling_volatility_window: int = 10,
+    rolling_price_window: int = 10,
     kalman_q: float = 1e-5,
     kalman_r: float = 1e-2,
 ) -> pd.DataFrame:
     """
     Create chronologically ordered model features for each ticker
-    Adds the Kalman-smoothed price, daily percentage return,
-    price_trend_deviation, rolling_volatility and gemini_sentiment_score. 
+    Adds the rolling mean price deviation, daily percentage return,
+    price_trend_deviation, rolling_volatility and gemini_sentiment_score
     """
     result = df.sort_values(["ticker", "date"]).copy()
     result = Kalman_Filter(Q=kalman_q, R=kalman_r).smooth_dataframe(result)
-    result = add_gemini_inputs(result, gemini_data)
 
     grouped = result.groupby("ticker", group_keys = False)
     result["daily_return"] = grouped["adjusted_close"].pct_change()
+    rolling_price = grouped["adjusted_close"].transform(
+        lambda values: values.rolling(rolling_price_window).mean()
+    )
     result["price_trend_deviation"] = (
-        result["adjusted_close"] - result["kalman_smoothed_price"]
+        result["adjusted_close"] - rolling_price
     )
     result["rolling_volatility"] = grouped["daily_return"].transform(
         lambda values: values.rolling(rolling_volatility_window).std()
     )
 
-    return result
+    daily_ticker_frames = []
+    columns_to_forward_fill = [
+        "adjusted_close",
+        "volume",
+        "kalman_smoothed_price",
+        "kalman_velocity",
+        "price_trend_deviation",
+        "rolling_volatility"
+    ]
+
+    for ticker, ticker_df in result.groupby("ticker"):
+        ticker_df = ticker_df.copy()
+        ticker_df["date"] = pd.to_datetime(ticker_df["date"])
+        ticker_df = ticker_df.set_index("date")
+        calendar_end = ticker_df.index.max()
+        if prediction_window_start is not None:
+            calendar_end = pd.to_datetime(prediction_window_start)
+        calendar_dates = pd.date_range(
+            ticker_df.index.min(),
+            calendar_end,
+            freq = "D"
+        )
+        ticker_df = ticker_df.reindex(calendar_dates)
+        ticker_df["ticker"] = ticker
+        ticker_df[columns_to_forward_fill] = ticker_df[
+            columns_to_forward_fill
+        ].ffill()
+        ticker_df["date"] = ticker_df.index.date
+        daily_ticker_frames.append(ticker_df.reset_index(drop = True))
+
+    result = pd.concat(daily_ticker_frames, ignore_index = True)
+    return add_gemini_inputs(result, gemini_data, horizon_days)
+
+
+def calendar_future_returns(
+    ticker_df: pd.DataFrame,
+    horizon_days: int
+) -> pd.Series:
+    ticker_df = ticker_df.sort_values("date")
+    dates = pd.to_datetime(ticker_df["date"]).reset_index(drop = True)
+    prices = ticker_df["adjusted_close"].reset_index(drop = True)
+    future_returns = []
+
+    for index, current_date in enumerate(dates):
+        target_date = current_date + pd.Timedelta(days = horizon_days)
+        target_index = dates.searchsorted(target_date)
+
+        if target_index >= len(ticker_df):
+            future_returns.append(float("nan"))
+            continue
+
+        current_price = prices.iloc[index]
+        future_price = prices.iloc[target_index]
+        future_returns.append((future_price / current_price) - 1)
+
+    return pd.Series(future_returns, index = ticker_df.index)
+
+
+def calendar_future_volatility(
+    ticker_df: pd.DataFrame,
+    horizon_days: int
+) -> pd.Series:
+    ticker_df = ticker_df.sort_values("date")
+    dates = pd.to_datetime(ticker_df["date"]).reset_index(drop = True)
+    daily_returns = ticker_df["daily_return"].reset_index(drop = True)
+    future_volatility = []
+
+    for current_date in dates:
+        target_date = current_date + pd.Timedelta(days = horizon_days)
+        future_returns = daily_returns[
+            (dates > current_date) & (dates <= target_date)
+        ].dropna()
+        future_volatility.append(future_returns.std())
+
+    return pd.Series(future_volatility, index = ticker_df.index)
 
 
 def build_training_frame(
@@ -154,29 +254,42 @@ def build_training_frame(
     gemini_data: list[dict[str, Any]],
     feature_columns: list[str],
     rolling_volatility_window: int = 10,
+    rolling_price_window: int = 10,
     kalman_q: float = 1e-5,
-    kalman_r: float = 1e-2,
+    kalman_r: float = 1e-2
 ) -> pd.DataFrame:
     """
     Adds future outcomes and removes rows that cannot be used for training.
-    future_return_outcome is the percentage price change over the requested
-    horizon. future_volatility_outcome is the standard deviation of daily
-    returns over that future horizon.
+    future_return_outcome is the percentage price change through the calendar
+    target date. future_volatility_outcome uses real trading returns observed
+    inside that calendar window.
     """
     result = build_model_feature_frame(
         df,
         gemini_data,
+        horizon_days,
         rolling_volatility_window=rolling_volatility_window,
+        rolling_price_window=rolling_price_window,
         kalman_q=kalman_q,
         kalman_r=kalman_r,
     )
 
     grouped = result.groupby("ticker", group_keys = False)
-    result["future_return_outcome"] = grouped["adjusted_close"].transform(
-        lambda prices: prices.pct_change(horizon_days).shift(-horizon_days)
+    future_return_groups = (
+        calendar_future_returns(ticker_df, horizon_days)
+        for _, ticker_df in grouped
     )
-    result["future_volatility_outcome"] = grouped["daily_return"].transform(
-        lambda values: values.rolling(horizon_days).std().shift(-horizon_days)
+    result["future_return_outcome"] = pd.concat(future_return_groups).reindex(
+        result.index
+    )
+    future_volatility_groups = (
+        calendar_future_volatility(ticker_df, horizon_days)
+        for _, ticker_df in grouped
+    )
+    result["future_volatility_outcome"] = pd.concat(
+        future_volatility_groups
+    ).reindex(
+        result.index
     )
 
     return result.dropna(
@@ -190,7 +303,7 @@ def train_return_predictor(
     target_column: str,
     timeline_days: int,
 ) -> GradientBoostingRegressor:
-    """ Fits a time-series-weighted Gradient Boosting return predictor """
+    """Fits a time-series-weighted Gradient Boosting return predictor"""
 
     # Extract input and output columns
     X = df[feature_columns]
@@ -199,10 +312,10 @@ def train_return_predictor(
     
     # Set model hyperparameters
     return_model = GradientBoostingRegressor(
-        n_estimators = config["n_estimators"],     # Sequential tree learning steps
-        learning_rate = config["learning_rate"],   # Step size down loss gradient
-        max_depth = 3,          # Capture interactive feature variables
-        subsample = 0.85,       # Minimize variance (hide some data from predictors)
+        n_estimators = config["n_estimators"], # Sequential tree learning steps
+        learning_rate = config["learning_rate"], # Step size down loss gradient
+        max_depth = 3, # Capture interactive feature variables
+        subsample = 0.85, # Minimize variance (hide some data from predictors)
         random_state = 10
     )
 
@@ -224,16 +337,16 @@ def train_volatility_predictor(
     target_column: str,
     timeline_days: int,
 ) -> RandomForestRegressor:
-    """ Fits a time-series-weighted Random Forest volatility predictor """
+    """Fits a time-series-weighted Random Forest volatility predictor"""
 
     X = df[feature_columns]
     y = df[target_column]
 
     volatility_model = RandomForestRegressor(
-        n_estimators = 200,      # Parallel trees: can push higher
-        max_depth = 6,           # Less prone to overfitting: push depth higher
-        min_samples_split = 5,   # Lower = more specific rules (potential overfitting)
-        n_jobs = -1,              # Spread calculations across available cores
+        n_estimators = 200, # Parallel trees: can push higher
+        max_depth = 6, # Less prone to overfitting: push depth higher
+        min_samples_split = 5, # Lower = more specific rules (potential overfitting)
+        n_jobs = -1, # Spread calculations across available cores
         random_state = 10
     )
 

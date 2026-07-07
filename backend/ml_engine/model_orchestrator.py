@@ -13,8 +13,8 @@ from ml_engine.train import (
     save_model,
 )
 
-# Inference data helpers
-from ml_engine.predictor import build_inference_features, FEATURE_COLUMNS
+# Prediction boundary
+from ml_engine.predictor import select_inference_features, FEATURE_COLUMNS
 
 # Instantiate a model once per timeline and let the instance live statically for re-use
 class TimelineModel:
@@ -61,10 +61,10 @@ class TimelineModel:
             Path(model_dir) / f"rfr_volatility_model_{self.timeline_days}d.pkl"
         )
 
-    def return_inference(self, df: pd.DataFrame, kalman_toggle = True) -> np.ndarray:
-        X = build_inference_features(self.timeline_days, df, kalman_toggle)
+    def return_inference(self, processed_df: pd.DataFrame) -> np.ndarray:
+        X = select_inference_features(processed_df)
         return self.return_model.predict(X)
     
-    def volatility_inference(self, df: pd.DataFrame, kalman_toggle = True) -> np.ndarray:
-        X = build_inference_features(self.timeline_days, df, kalman_toggle)
+    def volatility_inference(self, processed_df: pd.DataFrame) -> np.ndarray:
+        X = select_inference_features(processed_df)
         return self.volatility_model.predict(X)
