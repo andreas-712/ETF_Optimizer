@@ -12,9 +12,10 @@ from ml_engine.train import (
     train_volatility_predictor,
     save_model,
 )
-
-# Prediction boundary
 from ml_engine.predictor import select_inference_features, FEATURE_COLUMNS
+
+SAVED_MODEL_DIR = Path(__file__).resolve().parent / "saved_models"
+
 
 # Instantiate a model once per timeline and let the instance live statically for re-use
 class TimelineModel:
@@ -53,18 +54,36 @@ class TimelineModel:
 
 
     # Loads trained model from directory (only do this once per prediction timeline and save instance statically)
-    def load(self, model_dir: str):
+    def _load(self):
         self.return_model = joblib.load(
-            Path(model_dir) / f"gbr_return_model_{self.timeline_days}d.pkl"
+            Path(SAVED_MODEL_DIR) / f"gbr_return_model_{self.timeline_days}d.pkl"
         )
         self.volatility_model = joblib.load(
-            Path(model_dir) / f"rfr_volatility_model_{self.timeline_days}d.pkl"
+            Path(SAVED_MODEL_DIR) / f"rfr_volatility_model_{self.timeline_days}d.pkl"
         )
 
     def return_inference(self, processed_df: pd.DataFrame) -> np.ndarray:
+        if self.return_model == None:
+            print(f"Return model for {self.timeline_days} day horizons not loaded yet\n")
+            return np.array([])
         X = select_inference_features(processed_df)
         return self.return_model.predict(X)
     
     def volatility_inference(self, processed_df: pd.DataFrame) -> np.ndarray:
+        if self.volatility_model == None:
+            print(f"Volatility model for {self.timeline_days} day horizons not loaded yet\n")
+            return np.array([])
         X = select_inference_features(processed_df)
         return self.volatility_model.predict(X)
+
+
+MODELS = {
+    5: TimelineModel(5),
+    20: TimelineModel(20),
+    90: TimelineModel(90)
+}
+
+def load_models() -> None:
+    """Loads all available timeline models"""
+    for model in MODELS.values():
+        model._load()

@@ -24,11 +24,10 @@ from ml_engine.train import (
     train_volatility_predictor
 )
 
-
+from ml_engine.model_orchestrator import SAVED_MODEL_DIR
 TICKERS = ["NVDA", "AAPL", "AMZN", "META", "MSFT"]
 PREDICTION_HORIZON_DAYS = [3, 20, 90]
 PLOT_DIR = Path(__file__).resolve().parent / "plots"
-SAVED_MODEL_DIR = Path(__file__).resolve().parent / "saved_models"
 TRAINING_GEMINI_DATA_PATH = Path(__file__).resolve().parent / "batch_data" / "gemini_training_outputs.json"
 NUMERICAL_DATA_PATH = Path(__file__).resolve().parent / "batch_data" / "numerical_data.json"
 RETRAIN_MODES = {"Y", "N"}

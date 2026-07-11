@@ -26,12 +26,15 @@ from pathlib import Path
 from sklearn.ensemble import GradientBoostingRegressor, RandomForestRegressor
 import math
 
+from ml_engine.gemini import GEMINI_RESPONSE_FIELDS
 from math_engine.Kalman_Filter import Kalman_Filter
 
 SAVED_MODEL_DIR = Path(__file__).resolve().parent / "saved_models"
 RETURN_HALF_LIFE_MULTIPLIER = 2
 MIN_RETURN_HALF_LIFE_DAYS = 5
 MAX_RETURN_HALF_LIFE_DAYS = 180
+ROLLING_VOLATILITY_WINDOW = 10
+ROLLING_PRICE_WINDOW = 10
 
 
 def return_half_life_days(timeline_days: int) -> int:
@@ -43,7 +46,7 @@ def return_half_life_days(timeline_days: int) -> int:
     )
 
 
-def return_model_config(timeline_days: int) -> dict[str, int | float]:
+def _return_model_config(timeline_days: int) -> dict[str, int | float]:
     """Returns Gradient Boosting hyperparameters based on prediction horizon."""
     if timeline_days == 5:
         return {
@@ -79,26 +82,18 @@ def save_model(model: Any, filename: str) -> Path:
     return output_path
 
 
-def build_gemini_feature_frame(
+def _build_gemini_feature_frame(
     gemini_data: list[dict[str, Any]],
     horizon_days: int
 ) -> pd.DataFrame:
     """
-    Build one validated sentiment-score row per ticker and date.
-    The score is relevance * polarity * urgency and ranges from -100 to 100. 
+    Build one validated sentiment-score row per ticker and date with fields [ticker, date, score].
+    The score is relevance * polarity * urgency and ranges from -100 to 100.
     The input must contain one row per ticker, date, and prediction horizon.
     """
     # 1. Checks for data integrity
     result = pd.DataFrame(gemini_data)
-    required_columns = {
-        "ticker",
-        "date",
-        "prediction_horizon_days",
-        "relevance",
-        "polarity",
-        "urgency"
-    }
-    missing_columns = required_columns - set(result.columns)
+    missing_columns = GEMINI_RESPONSE_FIELDS - set(result.columns)
     if missing_columns:
         raise ValueError(f"Gemini data is missing columns: {missing_columns}")
 
@@ -131,30 +126,29 @@ def build_gemini_feature_frame(
     return result[["ticker", "date", "gemini_sentiment_score"]]
 
 
-def add_gemini_inputs(
+def _add_gemini_outputs(
     df: pd.DataFrame,
     gemini_data: list[dict[str, Any]],
     horizon_days: int
 ) -> pd.DataFrame:
     """Join daily Gemini sentiment scores onto market data"""
-    gemini_features = build_gemini_feature_frame(gemini_data, horizon_days)
+    gemini_features = _build_gemini_feature_frame(gemini_data, horizon_days)
     return df.merge(gemini_features, on=["ticker", "date"], how = "left")
 
 
 def build_model_feature_frame(
     df: pd.DataFrame,
-    gemini_data: list[dict[str, Any]],
+    gemini_outputs: list[dict[str, Any]],
     horizon_days: int,
-    prediction_window_start = None, # Should be now for live
-    rolling_volatility_window: int = 10,
-    rolling_price_window: int = 10,
+    prediction_window_start: str = None, # Should be dt.now for live
     kalman_q: float = 1e-5,
     kalman_r: float = 1e-2,
 ) -> pd.DataFrame:
     """
-    Create chronologically ordered model features for each ticker
-    Adds the rolling mean price deviation, daily percentage return,
-    price_trend_deviation, rolling_volatility and gemini_sentiment_score
+    Create chronologically ordered model features for each ticker.
+    Adds the rolling mean price deviation, daily percentage return, 
+    price_trend_deviation, rolling_volatility and gemini_sentiment_score.
+    df: unprocessed numerical df. gemini_outputs: unprocessed sentiment scores.
     """
     result = df.sort_values(["ticker", "date"]).copy()
     result = Kalman_Filter(Q=kalman_q, R=kalman_r).smooth_dataframe(result)
@@ -162,13 +156,13 @@ def build_model_feature_frame(
     grouped = result.groupby("ticker", group_keys = False)
     result["daily_return"] = grouped["adjusted_close"].pct_change()
     rolling_price = grouped["adjusted_close"].transform(
-        lambda values: values.rolling(rolling_price_window).mean()
+        lambda values: values.rolling(ROLLING_PRICE_WINDOW).mean()
     )
     result["price_trend_deviation"] = (
-        result["adjusted_close"] - rolling_price
+        (result["adjusted_close"] / rolling_price) - 1
     )
     result["rolling_volatility"] = grouped["daily_return"].transform(
-        lambda values: values.rolling(rolling_volatility_window).std()
+        lambda values: values.rolling(ROLLING_VOLATILITY_WINDOW).std()
     )
 
     daily_ticker_frames = []
@@ -202,7 +196,7 @@ def build_model_feature_frame(
         daily_ticker_frames.append(ticker_df.reset_index(drop = True))
 
     result = pd.concat(daily_ticker_frames, ignore_index = True)
-    return add_gemini_inputs(result, gemini_data, horizon_days)
+    return _add_gemini_outputs(result, gemini_outputs, horizon_days)
 
 
 def calendar_future_returns(
@@ -249,29 +243,24 @@ def calendar_future_volatility(
 
 
 def build_training_frame(
-    df: pd.DataFrame,
+    df: pd.DataFrame, # Processed numerical df
     horizon_days: int,
     gemini_data: list[dict[str, Any]],
     feature_columns: list[str],
-    rolling_volatility_window: int = 10,
-    rolling_price_window: int = 10,
     kalman_q: float = 1e-5,
     kalman_r: float = 1e-2
 ) -> pd.DataFrame:
     """
     Adds future outcomes and removes rows that cannot be used for training.
-    future_return_outcome is the percentage price change through the calendar
-    target date. future_volatility_outcome uses real trading returns observed
-    inside that calendar window.
+    future_return_outcome is the percentage price change through the calendar target date.
+    future_volatility_outcome uses real trading returns observed inside that calendar window.
     """
     result = build_model_feature_frame(
         df,
         gemini_data,
         horizon_days,
-        rolling_volatility_window=rolling_volatility_window,
-        rolling_price_window=rolling_price_window,
         kalman_q=kalman_q,
-        kalman_r=kalman_r,
+        kalman_r=kalman_r
     )
 
     grouped = result.groupby("ticker", group_keys = False)
@@ -308,7 +297,7 @@ def train_return_predictor(
     # Extract input and output columns
     X = df[feature_columns]
     y = df[target_column]
-    config = return_model_config(timeline_days)
+    config = _return_model_config(timeline_days)
     
     # Set model hyperparameters
     return_model = GradientBoostingRegressor(

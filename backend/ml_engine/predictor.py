@@ -12,5 +12,5 @@ FEATURE_COLUMNS = [
 
 
 def select_inference_features(df: pd.DataFrame) -> pd.DataFrame:
-    """Return only the fully processed columns expected by the models."""
+    """Return processed feature columns for the ML models"""
     return df[FEATURE_COLUMNS]

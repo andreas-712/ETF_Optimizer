@@ -20,6 +20,14 @@ if not GEMINI_API_KEY:
     )
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash")
 GEMINI_USE_SEARCH = os.getenv("GEMINI_USE_SEARCH", "false").lower() == "true"
+GEMINI_RESPONSE_FIELDS = {
+  "ticker",
+  "date",
+  "prediction_horizon_days",
+  "relevance",
+  "polarity",
+  "urgency"
+}
 
 # Initialize the SDK client
 client = genai.Client(api_key=GEMINI_API_KEY)
@@ -60,6 +68,9 @@ Use only the provided article summaries and company metrics as your reference fo
 
 Return exactly one strict JSON object with exactly these keys:
 {
+  "ticker": string,
+  "date": "YYYY-MM-DD",
+  "prediction_horizon_days": number,
   "relevance": number,
   "polarity": number,
   "urgency": number
@@ -76,7 +87,7 @@ Calibration rules:
 3. If the evidence is mixed, expectation-heavy, already priced in, or mostly speculative, choose conservative urgency scores (near 0).
 4. For longer timelines, reduce urgency unless the catalyst is likely to keep affecting the stock throughout most of the requested window.
 
-Aggregate all relevant events into one final score. Do not return event lists, nested objects, arrays, explanations, markdown, ticker, date, or any extra keys."""
+Aggregate all relevant events into one final score. Do not return event lists, nested objects, arrays, explanations, markdown or any extra keys."""
 
 if DATA_MODE == LIVE_MODE:
     SYSTEM_PROMPT = LIVE_PREDICTION_PROMPT
