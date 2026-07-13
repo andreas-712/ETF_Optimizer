@@ -23,38 +23,43 @@ def fetch_numerical_ticker_data(
     end_date: str
 ) -> pd.DataFrame:
     """
-    Fetches daily market data times. Standardized to EST
+    Fetches daily market data standardized to EST.
+    Batches requests in parallel.
     """
     print(f"Fetching numerical data from {start_date} to {end_date} for: {tickers}")
 
-    compiled_records = []
+    raw_yf_df = yf.download(
+        tickers,
+        start = start_date,
+        end = end_date,
+        progress = False,
+        auto_adjust = False,
+        group_by = "ticker",
+        threads = True,
+    )
 
-    # Download market data for given ticker
+    if raw_yf_df.empty:
+        print("No numerical data returned")
+        return pd.DataFrame()
+
+    compiled_records = []
     for symbol in tickers:
         try:
-            raw_yf_df = yf.download(
-                symbol,
-                start=start_date,
-                end=end_date,
-                progress=False,
-                auto_adjust=False,
-            )
+            symbol_df = raw_yf_df[symbol].reset_index()
 
-            if raw_yf_df.empty:
+            if symbol_df.empty:
                 print(f"No data returned for {symbol}")
                 continue
             
-            raw_yf_df = raw_yf_df.reset_index()
-
             # Add in adjusted close column
-            adjusted_close_column = "Adj Close" if "Adj Close" in raw_yf_df.columns else "Close"
+            adjusted_close_column = "Adj Close" if "Adj Close" in symbol_df.columns else "Close"
 
             # Reformat
             formatted_df = pd.DataFrame({
-                'date': pd.to_datetime(_as_series(raw_yf_df['Date'])).dt.date,
-                'ticker': symbol,
-                'adjusted_close': _as_series(raw_yf_df[adjusted_close_column]).astype(float),
-                'volume': _as_series(raw_yf_df['Volume']).astype(int)
+                "date": pd.to_datetime(_as_series(symbol_df["Date"])).dt.date,
+                "ticker": symbol,
+                "adjusted_close": _as_series(symbol_df[adjusted_close_column]).astype(float),
+                "volume": _as_series(symbol_df["Volume"]).astype(int)
             })
 
             # Append ticker with data to df
