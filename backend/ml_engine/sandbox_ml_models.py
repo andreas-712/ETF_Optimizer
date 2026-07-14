@@ -2,6 +2,7 @@
 Trains and tests models with Gemini values
 Backtests 3, 20, and 90 day models on fixed batch datasets
 Outputs a TSV block to log parameters and accuracy
+
 File writes: plots/[sandbox_model_results.tsv, latest_predictions.tsv]
 """
 import json

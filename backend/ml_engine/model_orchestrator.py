@@ -1,4 +1,8 @@
-# Orchestrates the full ML lifecycle for a given timeline instance model
+"""
+This file contains functions and classes for model orchestration:
+    - Managing one return and volatility model per prediction horizon
+    - Loading saved models and running inference through timeline instances
+"""
 
 from pathlib import Path
 import joblib

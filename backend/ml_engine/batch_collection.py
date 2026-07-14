@@ -1,5 +1,8 @@
 """
-Collects numerical data, summaries, balance sheets and historical grades for backtesting
+This file contains functions for the historical batch collection flow:
+    - Collecting numerical prices, article summaries, balance sheets, and grades
+    - Filtering summaries and producing Gemini batch requests for model training
+
 File writes under batch_data/
 """
 

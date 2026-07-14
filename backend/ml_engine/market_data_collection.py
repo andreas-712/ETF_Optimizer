@@ -1,7 +1,8 @@
-'''
-Collects market data for tickers
-Currently uses Financial Modeling Prep (FMP) API for market news
-'''
+"""
+This file contains functions for collecting market data:
+    - Fetching daily numerical ticker data from yfinance
+    - Fetching and parsing live ticker inputs for Gemini inference
+"""
 
 import yfinance as yf
 import pandas as pd

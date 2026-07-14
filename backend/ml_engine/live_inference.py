@@ -1,3 +1,8 @@
+"""
+This file contains functions for the live inference flow:
+    - Selecting candidate tickers
+    - Parallelized inference for return and volatility, abstracting the end-to-end flow
+"""
 import datetime as dt
 from zoneinfo import ZoneInfo # Standardized to ny time
 import yfinance as yf
@@ -11,9 +16,9 @@ from ml_engine.train import build_model_feature_frame, ROLLING_PRICE_WINDOW, ROL
 # Can choose multiple sectors, company sizes, and blacklisted tickers
 # USER_INPUTS = ["sectors", "company_sizes", "risk_tolerance", "blacklisted", "max_pool", "min_pool"]
 # RISK_TOLERANCES = {"high", "medium", "low"}
+# SECTORS = {"technology", "financial", "energy"}
+# COMPANY_SIZES = {"big-cap", "mid-cap", "small-cap"}
 
-SECTORS = {"technology", "financial", "energy"}
-COMPANY_SIZES = {"big-cap", "mid-cap", "small-cap"}
 SMALL_CAP_LOW = 300_000_000 # $300 million USD
 SMALL_CAP_HIGH = 2_000_000_000 # $2 billion USD
 BIG_CAP_LOW = 10_000_000_000 # $10 billion USD
@@ -72,6 +77,7 @@ async def predict_tickers(tickers: list[str], horizon_days: int) -> dict[str, di
         valid_gemini_inference_dicts.append(gemini_inference_dict)
 
     if not valid_gemini_inference_dicts:
+        print("No valid Gemini input data received")
         return {}
 
     valid_tickers = [gemini_inference_dict["ticker"] for gemini_inference_dict in valid_gemini_inference_dicts]
@@ -103,10 +109,8 @@ async def predict_tickers(tickers: list[str], horizon_days: int) -> dict[str, di
     return predictions
 
 
-def build_ticker_query(user_inputs: dict) -> yf.EquityQuery:
-    """
-    Builds the yfinance query for gathering preliminary candidates
-    """
+def _build_ticker_query(user_inputs: dict) -> yf.EquityQuery:
+    """Builds the yfinance query for gathering preliminary candidates"""
     # US-only
     filters = [yf.EquityQuery("eq", ["region", "us"])]
 
@@ -142,10 +146,8 @@ def _sync_fetch(ticker: str):
         print(f"Analyst ratings retrieval for ticker {ticker} failed")
         return None
         
-async def fetch_analyst_ratings(symbol: str) -> float:
-    """
-    Asynchronously retrieves aggregated analyst rating scores for preliminary ticker filtering
-    """
+async def _fetch_analyst_ratings(symbol: str) -> float:
+    """Asynchronously retrieves aggregated analyst rating scores for preliminary ticker filtering"""
     df = await asyncio.to_thread(_sync_fetch, symbol)
     if df is None or df.empty or "period" not in df.columns:
         return -999.0 # Sentinel value
@@ -161,8 +163,9 @@ async def fetch_analyst_ratings(symbol: str) -> float:
     return float(bullish_signals - bearish_signals)
 
 async def get_ticker_pool(user_inputs: dict) -> list:
+    """Returns a filtered pool of candidate tickers of up to max_pool tickers"""
     # Build and get query
-    query = build_ticker_query(user_inputs)
+    query = _build_ticker_query(user_inputs)
 
     # 2. Get initial candidates (2x max)
     clamped_max_pool = min(max(user_inputs["max_pool"], MIN_POOL_LOW_BOUND * 2), MAX_POOL_UPPER_BOUND * 2)
@@ -175,7 +178,7 @@ async def get_ticker_pool(user_inputs: dict) -> list:
     filtered_candidates = [t for t in full_candidates if t not in user_inputs["blacklisted"]]
     
     # 2. Analyst ratings
-    tasks = [fetch_analyst_ratings(ticker) for ticker in filtered_candidates]
+    tasks = [_fetch_analyst_ratings(ticker) for ticker in filtered_candidates]
     scores = await asyncio.gather(*tasks)
 
     valid_pool = [(t, s) for t, s in zip(filtered_candidates, scores)]

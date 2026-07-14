@@ -1,19 +1,7 @@
 """
-Build model features and train the return and volatility predictors.
-
-Feature columns:
-    price_trend_deviation:
-        Adjusted close minus the rolling mean price. Positive
-        value means the market price is above its estimated underlying trend a
-        negative value means it is below that trend.
-    rolling_volatility:
-        Rolling standard deviation of daily percentage returns for each
-        ticker. Larger values mean the price has recently moved less consistently
-        and therefore carries more short-term movement.
-    gemini_sentiment_score
-        News relevance multiplied by polarity and urgency ranging from -100 to 100.
-        The sign represents negative or positive sentiment and the magnitude
-        represents its estimated impact on ticker value.
+This file contains functions for the model training flow:
+    - Building return, volatility, and Gemini feature frames
+    - Training and saving return and volatility predictors
 
 File writes: saved_models/{filename}.pkl
 """

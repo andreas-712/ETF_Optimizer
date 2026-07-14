@@ -1,4 +1,8 @@
-"""Selects fully processed model features for prediction."""
+"""
+This file contains functions for prediction feature selection:
+    - Defining the shared model feature columns
+    - Selecting fully processed inference features for return and volatility models
+"""
 
 import pandas as pd
 

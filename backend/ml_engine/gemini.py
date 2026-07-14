@@ -1,3 +1,9 @@
+"""
+This file contains functions and prompts for Gemini inference:
+    - Defining live and backtesting sentiment extraction prompts
+    - Calling Gemini asynchronously and parsing strict JSON ticker scores
+"""
+
 import json
 import os
 from pathlib import Path
