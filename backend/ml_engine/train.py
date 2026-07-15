@@ -187,10 +187,11 @@ def build_model_feature_frame(
     return _add_gemini_outputs(result, gemini_outputs, horizon_days)
 
 
-def calendar_future_returns(
-    ticker_df: pd.DataFrame,
-    horizon_days: int
-) -> pd.Series:
+def calendar_future_returns(ticker_df: pd.DataFrame, horizon_days: int) -> pd.Series:
+    """
+    Creates training labels for each return prediction horizon.
+    Handles one ticker, across all given backtesting dates, for one horizon.
+    """
     ticker_df = ticker_df.sort_values("date")
     dates = pd.to_datetime(ticker_df["date"]).reset_index(drop = True)
     prices = ticker_df["adjusted_close"].reset_index(drop = True)
@@ -211,10 +212,11 @@ def calendar_future_returns(
     return pd.Series(future_returns, index = ticker_df.index)
 
 
-def calendar_future_volatility(
-    ticker_df: pd.DataFrame,
-    horizon_days: int
-) -> pd.Series:
+def calendar_future_volatility(ticker_df: pd.DataFrame,horizon_days: int) -> pd.Series:
+    """
+    Creates training labels for each volatility prediction horizon.
+    Handles one ticker, across all given backtesting dates, for one horizon.
+    """
     ticker_df = ticker_df.sort_values("date")
     dates = pd.to_datetime(ticker_df["date"]).reset_index(drop = True)
     daily_returns = ticker_df["daily_return"].reset_index(drop = True)

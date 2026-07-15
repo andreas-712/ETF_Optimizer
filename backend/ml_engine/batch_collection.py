@@ -34,13 +34,14 @@ FMP_ENDPOINTS = ["balance-sheet-statement", "grades-historical"]
 # 2 quarters of data + starting 1 quarter before today + 1 quarter buffer
 NUM_QUARTERS = 5
 
+# For collecting data over the entire backtesting horizon
 COLLECTION_STATES = {
-    "numerical_data": "Y",
-    "summaries": "N",
-    "balance_sheets": "N",
-    "historical_grades": "N",
-    "filter_summaries": "N",
-    "produce_training_batch": "N"
+    "numerical_data": "N", # Gather historical numerical data
+    "summaries": "N", # Gather historical ticker news summaries
+    "balance_sheets": "N", # Gather historical balance sheets
+    "historical_grades": "N", # Gather historical analyst grades
+    "filter_summaries": "N", # Filter historical news summaries for high-quality input
+    "produce_training_batch": "Y"  # Produce training batch for Gemini inference in proper GCP format
 }
 
 FINNHUB_URL = os.getenv("FINNHUB_URL")
@@ -297,7 +298,7 @@ def produce_training_batch() -> None:
                             },
                         "contents": [
                                 {"role": "user",
-                                "parts": [{"text": f"Extract data for ticker {ticker} using only information available on or before {date}. Set prediction_horizon_days to {timeline_days}. Base your prediction on the following provided company metrics and executive summaries : \"Latest summaries\": {ticker_summaries[date]}, \"latest balance sheet\": {current_balance_sheet}, \"latest grades\": {current_historical_grades}. Score the expected direction and catalyst strength over approximately {timeline_days} days after {date}."}]
+                                "parts": [{"text": f"Extract data for ticker {ticker}. Set date to {date} and prediction_horizon_days to {timeline_days}. Base your prediction on the following provided company metrics and executive summaries : \"Latest summaries\": {ticker_summaries[date]}, \"latest balance sheet\": {current_balance_sheet}, \"latest grades\": {current_historical_grades}. Score the expected direction and catalyst strength over approximately {timeline_days} days after {date}."}]
                                 }
                             ],
                         "generationConfig": {

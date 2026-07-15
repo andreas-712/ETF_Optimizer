@@ -184,5 +184,5 @@ async def get_ticker_pool(user_inputs: dict) -> list:
     valid_pool = [(t, s) for t, s in zip(filtered_candidates, scores)]
     valid_pool.sort(key = lambda x: x[1], reverse = True)
 
-    iterator = max(clamped_max_pool, len(valid_pool))
-    return [valid_pool[0] for _ in range(iterator)]
+    pool_size = min(clamped_max_pool, len(valid_pool))
+    return [ticker for ticker, score in valid_pool[:pool_size]]
