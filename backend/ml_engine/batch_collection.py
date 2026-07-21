@@ -2,6 +2,8 @@
 This file contains functions for the historical batch collection flow:
     - Collecting numerical prices, article summaries, balance sheets, and grades
     - Filtering summaries and producing Gemini batch requests for model training
+    - Extracting and one-hot-encoding batch inference outputs based on industry
+    - Creating final dataset file for ML model training
 
 File writes under batch_data/
 """
@@ -28,7 +30,7 @@ NUMERICAL_START_DATE = dt.date(2025, 9, 11) # 11 trading days before START_DATE
 END_DATE = dt.date(2026, 3, 26) # Exclusive
 NUMERICAL_END_DATE = dt.date(2026, 6, 26) # Exclusive
 CHUNK_DAYS = 30
-TICKERS = ["NVDA", "AAPL", "AMZN", "META", "MSFT"]
+TICKERS = ["XOM", "CVX", "ET"] # NOT READY TO RUN
 PREDICTION_HORIZON_DAYS = [3, 20, 90]
 FMP_ENDPOINTS = ["balance-sheet-statement", "grades-historical"]
 # 2 quarters of data + starting 1 quarter before today + 1 quarter buffer
@@ -36,12 +38,35 @@ NUM_QUARTERS = 5
 
 # For collecting data over the entire backtesting horizon
 COLLECTION_STATES = {
-    "numerical_data": "N", # Gather historical numerical data
-    "summaries": "N", # Gather historical ticker news summaries
-    "balance_sheets": "N", # Gather historical balance sheets
-    "historical_grades": "N", # Gather historical analyst grades
-    "filter_summaries": "N", # Filter historical news summaries for high-quality input
-    "produce_training_batch": "Y"  # Produce training batch for Gemini inference in proper GCP format
+    "numerical_data": "Y", # Gather historical numerical data
+    "summaries": "Y", # Gather historical ticker news summaries
+    "balance_sheets": "Y", # Gather historical balance sheets
+    "historical_grades": "Y", # Gather historical analyst grades
+    "filter_summaries": "Y", # Filter historical news summaries for high-quality input
+    "produce_training_batch": "Y",  # Produce training batch for Gemini inference in proper GCP format
+    "extract_inferences": "Y",
+    "combine_training_inputs": "Y",
+}
+
+tech_company_terms = {"NVDA": ["nvidia", "nvda", "jensen huang", "gpu"],
+    "AAPL": ["apple", "aapl", "tim cook", "john ternus", "iphone"],
+    "MSFT": ["microsoft", "msft", "satya nadella", "azure"],
+    "META": ["meta", "llama", "mark zuckerberg"],
+    "AMZN": ["amazon", "amzn", "andy jassy", "jeff bezos", "aws"]
+}
+
+finance_company_terms = {
+    "JPM": ["jpmorgan", "jpm", "jamie dimon", "banking", "loans"],
+    "GS": ["goldman sachs", "gs", "david solomon", "investment banking", "trading"],
+    "V": ["visa", "ryan mcinerny", "payments", "cards"],
+    "BAC": ["bank of america", "bac", "brian moynihan", "banking", "loans"],
+    "PYPL": ["paypal", "pypl", "alex chriss", "payments", "checkout"]
+}
+
+energy_company_terms = {
+    "XOM": ["exxon", "exxonmobil", "xom", "darren woods", "oil", "gas"],
+    "CVX": ["chevron", "cvx", "mike wirth", "oil", "gas"],
+    "ET": ["energy transfer", "et", "tom long", "pipeline", "natural gas"]
 }
 
 FINNHUB_URL = os.getenv("FINNHUB_URL")
@@ -56,7 +81,13 @@ BALANCE_SHEETS_OUTPUT_PATH = OUTPUT_DIR / "fmp_balance_sheets.json"
 HISTORICAL_GRADES_OUTPUT_PATH = OUTPUT_DIR / "fmp_historical_grades.json"
 NUMERICAL_DATA_OUTPUT_PATH = OUTPUT_DIR / "numerical_data.json"
 FILTERED_SUMMARIES_OUTPUT_PATH = OUTPUT_DIR / "filtered_finnhub_summaries.json"
-BATCH_INFERENCE_DATA_OUTPUT_PATH = OUTPUT_DIR / "batch_requests.jsonl"
+BATCH_INFERENCE_DATA_OUTPUT_PATH = OUTPUT_DIR / "energy_batch_request.jsonl"
+INFERENCE_OUTPUT_DIR = Path(__file__).resolve().parent / "inference_outputs"
+BATCH_INFERENCE_OUTPUT_PATHS = {
+    "financial": INFERENCE_OUTPUT_DIR / "finance_inferences_0.jsonl",
+    "technology": INFERENCE_OUTPUT_DIR / "tech_inferences_0.jsonl",
+    "energy": INFERENCE_OUTPUT_DIR / "energy_inferences_0.jsonl",
+}
 URL_PATTERN = re.compile(r"https?://\S+|www\.\S+")
 
 
@@ -123,6 +154,19 @@ def collect_summaries() -> dict:
     return summaries_by_ticker
 
 
+def get_fmp_json(req: str, params: dict, ticker: str, endpoint: str):
+    response = requests.get(req, params = params)
+
+    try:
+        return response.json()
+    except requests.exceptions.JSONDecodeError:
+        print(f"FMP request failed for {ticker} on {endpoint}")
+        print(f"Status code: {response.status_code}")
+        print(f"Content type: {response.headers.get('content-type')}")
+        print(f"Response body: {response.text[:500]}")
+        raise
+
+
 def collect_balance_sheets() -> dict:
     """
     Collects balance sheets ordered from newest to oldest by filing date
@@ -132,7 +176,7 @@ def collect_balance_sheets() -> dict:
     for ticker in TICKERS:
         params = {"symbol": ticker.upper(), "limit": NUM_QUARTERS, "period": "quarter", "apikey": FMP_KEY} # Capped at 5 quarters
         req = FMP_URL + FMP_ENDPOINTS[0]
-        response = requests.get(req, params = params).json()
+        response = get_fmp_json(req, params, ticker, FMP_ENDPOINTS[0])
 
         time.sleep(6)
 
@@ -160,7 +204,7 @@ def collect_historical_grades() -> dict:
     for ticker in TICKERS:
         params = {"symbol": ticker.upper(), "limit": 10, "apikey": FMP_KEY}
         req = FMP_URL + FMP_ENDPOINTS[1]
-        response = requests.get(req, params = params).json()
+        response = get_fmp_json(req, params, ticker, FMP_ENDPOINTS[1])
         
         time.sleep(6)
 
@@ -181,11 +225,7 @@ def collect_historical_grades() -> dict:
 
 
 def filter_summaries() -> None:
-    company_terms = {"NVDA": ["nvidia", "nvda", "jensen huang", "gpu"],
-                     "AAPL": ["apple", "aapl", "tim cook", "john ternus", "iphone"],
-                     "MSFT": ["microsoft", "msft", "satya nadella", "azure"],
-                     "META": ["meta", "llama", "mark zuckerberg"],
-                     "AMZN": ["amazon", "amzn", "andy jassy", "jeff bezos", "aws"]}
+    company_terms = energy_company_terms
 
     summaries_by_ticker = json.loads(
         SUMMARIES_OUTPUT_PATH.read_text(encoding = "utf-8")
@@ -273,10 +313,14 @@ def produce_training_batch() -> None:
                 if date <= START_DATE.isoformat()
             )]
             # Get starting historical grade
-            current_historical_grades = ticker_historical_grades[max(
+            starting_historical_grade_dates = [
                 date for date in ticker_historical_grades
                 if date <= START_DATE.isoformat()
-            )]
+            ]
+            if starting_historical_grade_dates:
+                current_historical_grades = ticker_historical_grades[max(starting_historical_grade_dates)]
+            else:
+                current_historical_grades = ""
 
             for day_offset in range(181):
                 date = (START_DATE + dt.timedelta(days = day_offset)).isoformat()

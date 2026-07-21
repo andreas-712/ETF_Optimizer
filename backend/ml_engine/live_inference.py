@@ -16,17 +16,21 @@ from ml_engine.train import build_model_feature_frame, ROLLING_PRICE_WINDOW, ROL
 # Can choose multiple sectors, company sizes, and blacklisted tickers
 # USER_INPUTS = ["sectors", "company_sizes", "risk_tolerance", "blacklisted", "max_pool", "min_pool"]
 # RISK_TOLERANCES = {"high", "medium", "low"}
-# SECTORS = {"technology", "financial", "energy"}
+# SECTORS = {"technology": max_pct, "financial": max_pct, "energy": 1}, where 1 is the uncapped sentinel
 # COMPANY_SIZES = {"big-cap", "mid-cap", "small-cap"}
 
+INDUSTRIES = {"energy", "financial", "technology"}
 SMALL_CAP_LOW = 300_000_000 # $300 million USD
 SMALL_CAP_HIGH = 2_000_000_000 # $2 billion USD
 BIG_CAP_LOW = 10_000_000_000 # $10 billion USD
-MIN_POOL_LOW_BOUND = 5
+MIN_POOL_LOW_BOUND = 10
 MAX_POOL_UPPER_BOUND = 50
 
 
-async def predict_tickers(tickers: list[str], horizon_days: int) -> dict[str, dict[str, float | int]]:
+async def predict_tickers(
+    horizon_days: int,
+    ticker_industries: dict[str, str]
+) -> dict[str, dict[str, float | int]]:
     """
     Master async function for returning volatility and percent change data over the given horizon.
     Returns volatility pct, return pct, horizon days for each ticker.
@@ -35,6 +39,8 @@ async def predict_tickers(tickers: list[str], horizon_days: int) -> dict[str, di
     if horizon_days not in MODELS:
         print(f"Prediction horizon {horizon_days} unavailable")
         return  {}
+
+    tickers = list(ticker_industries)
 
     # Record current date
     now = dt.datetime.now(ZoneInfo("America/New_York"))
@@ -91,7 +97,8 @@ async def predict_tickers(tickers: list[str], horizon_days: int) -> dict[str, di
         now_date.strftime("%Y-%m-%d"),
     )
     # Return only latest (live) row for each ticker
-    live_input_frame = ml_processed_input_frame.groupby("ticker", group_keys = False).tail(1)
+    live_input_frame = ml_processed_input_frame.groupby("ticker", group_keys = False).tail(1).copy()
+    live_input_frame["industry"] = live_input_frame["ticker"].map(ticker_industries)
 
     # Load and predict
     prediction_model = MODELS[horizon_days]
@@ -109,17 +116,13 @@ async def predict_tickers(tickers: list[str], horizon_days: int) -> dict[str, di
     return predictions
 
 
-def _build_ticker_query(user_inputs: dict) -> yf.EquityQuery:
+def _build_ticker_query(user_inputs: dict, sector: str) -> yf.EquityQuery:
     """Builds the yfinance query for gathering preliminary candidates"""
     # US-only
     filters = [yf.EquityQuery("eq", ["region", "us"])]
 
-    sectors = user_inputs["sectors"]
-    if not sectors:
-        print("No sectors selected")
-
     # Add sectors to filter
-    filters.append(yf.EquityQuery("is-in", ["sector"] + [sector for sector in sectors]))
+    filters.append(yf.EquityQuery("eq", ["sector", sector.capitalize()]))
 
     sizes = user_inputs["sizes"]
     if not sizes:
@@ -163,26 +166,60 @@ async def _fetch_analyst_ratings(symbol: str) -> float:
     return float(bullish_signals - bearish_signals)
 
 async def get_ticker_pool(user_inputs: dict) -> list:
-    """Returns a filtered pool of candidate tickers of up to max_pool tickers"""
-    # Build and get query
-    query = _build_ticker_query(user_inputs)
+    """Returns up to max_pool sector-limited candidates, targeting min_pool when available."""
+    clamped_min_pool = min(
+        max(user_inputs["min_pool"], MIN_POOL_LOW_BOUND),
+        MAX_POOL_UPPER_BOUND,
+    )
+    clamped_max_pool = min(
+        max(user_inputs["max_pool"], clamped_min_pool),
+        MAX_POOL_UPPER_BOUND,
+    )
+    selected_pool = []
+    sector_pools = []
 
-    # 2. Get initial candidates (2x max)
-    clamped_max_pool = min(max(user_inputs["max_pool"], MIN_POOL_LOW_BOUND * 2), MAX_POOL_UPPER_BOUND * 2)
-    screener_data = yf.screen(query, size = clamped_max_pool * 2)
-    quotes = screener_data.get('quotes', [])
-    full_candidates = [quote["symbol"] for quote in quotes if "symbol" in quote]
+    for sector, cap in user_inputs["sectors"].items():
+        query = _build_ticker_query(user_inputs, sector)
+        screener_data = yf.screen(query, size = clamped_max_pool * 2)
+        quotes = screener_data.get("quotes", [])
+        candidates = [
+            quote["symbol"]
+            for quote in quotes
+            if "symbol" in quote and quote["symbol"] not in user_inputs["blacklisted"]
+        ]
 
-    # Begin filtering
-    # 1. Blacklisted
-    filtered_candidates = [t for t in full_candidates if t not in user_inputs["blacklisted"]]
-    
-    # 2. Analyst ratings
-    tasks = [_fetch_analyst_ratings(ticker) for ticker in filtered_candidates]
-    scores = await asyncio.gather(*tasks)
+        scores = await asyncio.gather(*[_fetch_analyst_ratings(ticker) for ticker in candidates])
+        sector_pool = [
+            {
+                "ticker": ticker,
+                "industry": sector,
+                "score": score,
+            }
+            for ticker, score in zip(candidates, scores)
+        ]
+        sector_pool.sort(key = lambda row: row["score"], reverse = True)
+        sector_pools.append(sector_pool)
 
-    valid_pool = [(t, s) for t, s in zip(filtered_candidates, scores)]
-    valid_pool.sort(key = lambda x: x[1], reverse = True)
+        pool_space = clamped_max_pool - len(selected_pool)
+        sector_limit = clamped_max_pool if cap == 1 else int(clamped_max_pool * cap)
+        sector_limit = min(pool_space, sector_limit)
+        selected_pool.extend(sector_pool[:sector_limit])
 
-    pool_size = min(clamped_max_pool, len(valid_pool))
-    return [ticker for ticker, score in valid_pool[:pool_size]]
+    # Truncated sector limits can leave fewer than min_pool candidates
+    # In this case, use the best remaining candidates without exceeding max_pool
+    if len(selected_pool) < clamped_min_pool:
+        selected_tickers = {row["ticker"] for row in selected_pool}
+        remaining_candidates = [
+            row
+            for sector_pool in sector_pools
+            for row in sector_pool
+            if row["ticker"] not in selected_tickers
+        ]
+        remaining_candidates.sort(key = lambda row: row["score"], reverse = True)
+        required_candidates = clamped_min_pool - len(selected_pool)
+        selected_pool.extend(remaining_candidates[:required_candidates])
+
+    return [
+        {"ticker": row["ticker"], "industry": row["industry"]}
+        for row in selected_pool[:clamped_max_pool]
+    ]

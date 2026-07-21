@@ -15,6 +15,7 @@ from sklearn.ensemble import GradientBoostingRegressor, RandomForestRegressor
 import math
 
 from ml_engine.gemini import GEMINI_RESPONSE_FIELDS
+from ml_engine.predictor import INDUSTRY_FEATURE_COLUMNS, add_industry_features
 from math_engine.Kalman_Filter import Kalman_Filter
 
 SAVED_MODEL_DIR = Path(__file__).resolve().parent / "saved_models"
@@ -75,9 +76,10 @@ def _build_gemini_feature_frame(
     horizon_days: int
 ) -> pd.DataFrame:
     """
-    Build one validated sentiment-score row per ticker and date with fields [ticker, date, score].
+    Build one validated feature row per ticker and date.
     The score is relevance * polarity * urgency and ranges from -100 to 100.
     The input must contain one row per ticker, date, and prediction horizon.
+    Industry is optional metadata; when present, it is converted to one-hot columns.
     """
     # 1. Checks for data integrity
     result = pd.DataFrame(gemini_data)
@@ -111,7 +113,16 @@ def _build_gemini_feature_frame(
         result["relevance"] * result["polarity"] * result["urgency"]
     )
 
-    return result[["ticker", "date", "gemini_sentiment_score"]]
+    # 3. Map each ticker to its respective industry
+    result = add_industry_features(result)
+
+    feature_columns = [
+        "ticker",
+        "date",
+        "gemini_sentiment_score",
+        *INDUSTRY_FEATURE_COLUMNS,
+    ]
+    return result[feature_columns]
 
 
 def _add_gemini_outputs(
