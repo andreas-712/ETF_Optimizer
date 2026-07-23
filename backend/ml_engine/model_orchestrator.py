@@ -11,7 +11,6 @@ import numpy as np
 
 # Training helpers
 from ml_engine.train import (
-    build_training_frame,
     train_return_predictor,
     train_volatility_predictor,
     save_model,
@@ -28,16 +27,26 @@ class TimelineModel:
         self.return_model = None
         self.volatility_model = None
 
-    # Trains and saves models under /ml_engine/saved_models
-    def train(self, market_df: pd.DataFrame, gemini_data: list[dict], kalman_r=1e-2, kalman_q=1e-5):
-        training_df = build_training_frame(
-            df = market_df,
-            horizon_days = self.timeline_days,
-            gemini_data = gemini_data,
-            feature_columns = FEATURE_COLUMNS,
-            kalman_r = kalman_r,
-            kalman_q = kalman_q,
-        )
+    # Train and save models from rows for one prediction horizon.
+    def train(self, training_df: pd.DataFrame) -> None:
+        required_columns = {
+            "date",
+            "prediction_horizon_days",
+            *FEATURE_COLUMNS,
+            "future_return_outcome",
+            "future_volatility_outcome",
+        }
+        missing_columns = required_columns - set(training_df.columns)
+        if missing_columns:
+            raise ValueError(
+                f"Flattened training frame is missing columns: {sorted(missing_columns)}"
+            )
+
+        training_horizons = set(training_df["prediction_horizon_days"].unique())
+        if training_horizons != {self.timeline_days}:
+            raise ValueError(
+                f"Training frame must contain only the model's prediction horizon ({self.timeline_days}); received {sorted(training_horizons)}"
+            )
 
         self.return_model = train_return_predictor(
             training_df,
@@ -82,7 +91,7 @@ class TimelineModel:
 
 
 MODELS = {
-    5: TimelineModel(5),
+    3: TimelineModel(3),
     20: TimelineModel(20),
     90: TimelineModel(90)
 }
