@@ -16,13 +16,19 @@ from pathlib import Path
 import requests
 from dotenv import load_dotenv
 import re
+import pandas as pd
 
 from ml_engine.market_data_collection import fetch_numerical_ticker_data
-from ml_engine.gemini import BACKTESTING_PROMPT
+from ml_engine.gemini import BACKTESTING_PROMPT, GEMINI_RESPONSE_FIELDS
+from ml_engine.predictor import FEATURE_COLUMNS
+from ml_engine.train import build_training_frame
 
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 load_dotenv(BACKEND_DIR / ".flaskenv")
+
+"""Change this for switching between sectors"""
+SECTOR = "financial"
 
 SUMMARY_START_DATE = dt.date(2025, 8, 26)
 START_DATE = dt.date(2025, 9, 26) # Inclusive
@@ -30,7 +36,6 @@ NUMERICAL_START_DATE = dt.date(2025, 9, 11) # 11 trading days before START_DATE
 END_DATE = dt.date(2026, 3, 26) # Exclusive
 NUMERICAL_END_DATE = dt.date(2026, 6, 26) # Exclusive
 CHUNK_DAYS = 30
-TICKERS = ["XOM", "CVX", "ET"] # NOT READY TO RUN
 PREDICTION_HORIZON_DAYS = [3, 20, 90]
 FMP_ENDPOINTS = ["balance-sheet-statement", "grades-historical"]
 # 2 quarters of data + starting 1 quarter before today + 1 quarter buffer
@@ -38,14 +43,14 @@ NUM_QUARTERS = 5
 
 # For collecting data over the entire backtesting horizon
 COLLECTION_STATES = {
-    "numerical_data": "Y", # Gather historical numerical data
-    "summaries": "Y", # Gather historical ticker news summaries
-    "balance_sheets": "Y", # Gather historical balance sheets
-    "historical_grades": "Y", # Gather historical analyst grades
-    "filter_summaries": "Y", # Filter historical news summaries for high-quality input
-    "produce_training_batch": "Y",  # Produce training batch for Gemini inference in proper GCP format
-    "extract_inferences": "Y",
-    "combine_training_inputs": "Y",
+    "numerical_data": "N", # Gather historical numerical data
+    "summaries": "N", # Gather historical ticker news summaries
+    "balance_sheets": "N", # Gather historical balance sheets
+    "historical_grades": "N", # Gather historical analyst grades
+    "filter_summaries": "N", # Filter historical news summaries for high-quality input
+    "produce_training_batch": "N",  # Produce training batch for Gemini inference in proper GCP format
+    "extract_inferences": "N",
+    "combine_training_inputs": "N",
 }
 
 tech_company_terms = {"NVDA": ["nvidia", "nvda", "jensen huang", "gpu"],
@@ -68,6 +73,13 @@ energy_company_terms = {
     "CVX": ["chevron", "cvx", "mike wirth", "oil", "gas"],
     "ET": ["energy transfer", "et", "tom long", "pipeline", "natural gas"]
 }
+COMPANY_TERMS_BY_SECTOR = {
+    "technology": tech_company_terms,
+    "financial": finance_company_terms,
+    "energy": energy_company_terms,
+}
+
+TICKERS = [ticker for ticker in COMPANY_TERMS_BY_SECTOR[SECTOR].keys()]
 
 FINNHUB_URL = os.getenv("FINNHUB_URL")
 FINNHUB_KEY = os.getenv("FINNHUB_KEY")
@@ -79,7 +91,14 @@ OUTPUT_DIR.mkdir(exist_ok=True)
 SUMMARIES_OUTPUT_PATH = OUTPUT_DIR / "finnhub_summaries.json"
 BALANCE_SHEETS_OUTPUT_PATH = OUTPUT_DIR / "fmp_balance_sheets.json"
 HISTORICAL_GRADES_OUTPUT_PATH = OUTPUT_DIR / "fmp_historical_grades.json"
-NUMERICAL_DATA_OUTPUT_PATH = OUTPUT_DIR / "numerical_data.json"
+TECHNOLOGY_NUMERICAL_DATA_OUTPUT_PATH = OUTPUT_DIR / "technology_numerical_data.json"
+FINANCIAL_NUMERICAL_DATA_OUTPUT_PATH = OUTPUT_DIR / "financial_numerical_data.json"
+ENERGY_NUMERICAL_DATA_OUTPUT_PATH = OUTPUT_DIR / "energy_numerical_data.json"
+NUMERICAL_DATA_OUTPUT_PATHS = {
+    "technology": TECHNOLOGY_NUMERICAL_DATA_OUTPUT_PATH,
+    "financial": FINANCIAL_NUMERICAL_DATA_OUTPUT_PATH,
+    "energy": ENERGY_NUMERICAL_DATA_OUTPUT_PATH,
+}
 FILTERED_SUMMARIES_OUTPUT_PATH = OUTPUT_DIR / "filtered_finnhub_summaries.json"
 BATCH_INFERENCE_DATA_OUTPUT_PATH = OUTPUT_DIR / "energy_batch_request.jsonl"
 INFERENCE_OUTPUT_DIR = Path(__file__).resolve().parent / "inference_outputs"
@@ -88,6 +107,8 @@ BATCH_INFERENCE_OUTPUT_PATHS = {
     "technology": INFERENCE_OUTPUT_DIR / "tech_inferences_0.jsonl",
     "energy": INFERENCE_OUTPUT_DIR / "energy_inferences_0.jsonl",
 }
+EXTRACTED_INFERENCES_OUTPUT_PATH = OUTPUT_DIR / "extracted_inferences.json"
+TRAINING_FILE_OUTPUT_PATH = OUTPUT_DIR / "training_file.json"
 URL_PATTERN = re.compile(r"https?://\S+|www\.\S+")
 
 
@@ -225,7 +246,7 @@ def collect_historical_grades() -> dict:
 
 
 def filter_summaries() -> None:
-    company_terms = energy_company_terms
+    company_terms = COMPANY_TERMS_BY_SECTOR[SECTOR]
 
     summaries_by_ticker = json.loads(
         SUMMARIES_OUTPUT_PATH.read_text(encoding = "utf-8")
@@ -358,15 +379,89 @@ def produce_training_batch() -> None:
 
         print(f"Batch inference data written to {BATCH_INFERENCE_DATA_OUTPUT_PATH}")
 
+def extract_inferences(industry: str, file_path: Path) -> list[dict]:
+    """
+    Extract valid Gemini outputs from one industry batch file.
+    Each returned row is identified by ticker, date, and prediction horizon.
+    """
+    extracted_inferences = []
+
+    with file_path.open(encoding = "utf-8") as inference_file:
+        for line_number, line in enumerate(inference_file, start = 1):
+            try:
+                batch_response = json.loads(line)
+                response_text = batch_response["response"]["candidates"][0]["content"]["parts"][0]["text"]
+                inference = json.loads(response_text)
+            except (IndexError, KeyError, TypeError, json.JSONDecodeError):
+                print(f"Invalid batch response in {file_path.name} on line {line_number}")
+                continue
+
+            if set(inference) != GEMINI_RESPONSE_FIELDS:
+                print(f"Invalid Gemini fields in {file_path.name} on line {line_number}")
+                continue
+
+            inference["industry"] = industry
+            extracted_inferences.append(inference)
+
+    return extracted_inferences
+
+
+def combine_training_inputs() -> None:
+    """Build one flat trainable row per ticker, date, and prediction horizon."""
+    numerical_data = []
+    for file_path in NUMERICAL_DATA_OUTPUT_PATHS.values():
+        numerical_data.extend(json.loads(file_path.read_text(encoding = "utf-8")))
+
+    gemini_data = json.loads(
+        EXTRACTED_INFERENCES_OUTPUT_PATH.read_text(encoding = "utf-8")
+    )
+    numerical_df = pd.DataFrame(numerical_data)
+    training_rows = []
+
+    for horizon_days in PREDICTION_HORIZON_DAYS:
+        training_df = build_training_frame(
+            numerical_df,
+            horizon_days,
+            gemini_data,
+            FEATURE_COLUMNS,
+        )
+        training_df["prediction_horizon_days"] = horizon_days
+        training_df["date"] = training_df["date"].astype(str)
+        training_df = training_df[
+            [
+                "ticker",
+                "date",
+                "prediction_horizon_days",
+                *FEATURE_COLUMNS,
+                "future_return_outcome",
+                "future_volatility_outcome",
+            ]
+        ]
+        training_rows.extend(training_df.to_dict(orient = "records"))
+
+    training_rows.sort(
+        key = lambda row: (
+            row["ticker"],
+            row["date"],
+            row["prediction_horizon_days"],
+        )
+    )
+    TRAINING_FILE_OUTPUT_PATH.write_text(
+        json.dumps(training_rows),
+        encoding = "utf-8",
+    )
+    print(f"Training file written to {TRAINING_FILE_OUTPUT_PATH}")
+
 
 def main():
     if COLLECTION_STATES["numerical_data"] == "Y":
         numerical_data = collect_numerical_data()
-        NUMERICAL_DATA_OUTPUT_PATH.write_text(
+        numerical_data_output_path = NUMERICAL_DATA_OUTPUT_PATHS[SECTOR]
+        numerical_data_output_path.write_text(
             json.dumps(numerical_data),
             encoding = "utf-8"
         )
-        print(f"Saved numerical data to {NUMERICAL_DATA_OUTPUT_PATH}")
+        print(f"Saved numerical data to {numerical_data_output_path}")
 
     if COLLECTION_STATES["summaries"] == "Y":
         summaries_by_ticker = collect_summaries()
@@ -397,6 +492,27 @@ def main():
 
     if COLLECTION_STATES["produce_training_batch"] == "Y":
         produce_training_batch()
+
+    if COLLECTION_STATES["extract_inferences"] == "Y":
+        extracted_inferences = []
+        for industry, file_path in BATCH_INFERENCE_OUTPUT_PATHS.items():
+            extracted_inferences.extend(extract_inferences(industry, file_path))
+
+        extracted_inferences.sort(
+            key = lambda row: (
+                row["ticker"],
+                row["date"],
+                row["prediction_horizon_days"],
+            )
+        )
+        EXTRACTED_INFERENCES_OUTPUT_PATH.write_text(
+            json.dumps(extracted_inferences),
+            encoding = "utf-8",
+        )
+        print(f"Extracted inferences written to {EXTRACTED_INFERENCES_OUTPUT_PATH}")
+
+    if COLLECTION_STATES["combine_training_inputs"] == "Y":
+        combine_training_inputs()
 
 
 if __name__ == "__main__":

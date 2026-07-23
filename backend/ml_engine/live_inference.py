@@ -166,7 +166,7 @@ async def _fetch_analyst_ratings(symbol: str) -> float:
     return float(bullish_signals - bearish_signals)
 
 async def get_ticker_pool(user_inputs: dict) -> list:
-    """Returns up to max_pool sector-limited candidates, targeting min_pool when available."""
+    """Returns up to the max pool sector-limited candidates."""
     clamped_min_pool = min(
         max(user_inputs["min_pool"], MIN_POOL_LOW_BOUND),
         MAX_POOL_UPPER_BOUND,
