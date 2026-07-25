@@ -15,7 +15,7 @@ The machine-learning sandbox is the latest milestone achieved in the project. Cu
 For the return Gradient Boosting Regressor and volatility Random Forest Regressor performance, the 20-day prediction horizon model achieved:
 
 - 58.281% mean return directional accuracy (win-rate or correct-direction-rate);
-- 0.6583% volatility RMSE (measure of volatility prediction accuracy);
+- 0.6583% volatility RMSE (measure of volatility prediction accuracy);  
 over a 477 test sample size using a mix of tech, finance, and energy sector tickers.
 
 The broader backend and portfolio-optimization layers are still under active development.
