@@ -6,7 +6,7 @@ The backend directory contains the backend API routing, database schema definiti
 
 To distribute workloads, the codebase separates web app infrastructure from our mathematical components:
 
-**Andreas's Workspace (`/resources`, `/schemas`, `/models`, `/ml_engine`):** Owns API endpoints, HTTP request validation, SQLAlchemy database design, cloud deployment orchestration, Gemini JSON feature mining, and predictive time-series models.
+**Andreas's Workspace (`/resources`, `/schemas`, `/models`, `/ml_engine`):** Owns API endpoints, HTTP request validation, SQLAlchemy database design, cloud deployment orchestration, Gemini model inference orchestration, and end-to-end async predictive time-series model inference.
 **Theo's Workspace (`/math_engine`):** Owns deterministic mathematical code.
 
 **Both workspaces remain decoupled from API endpoint logic for the Flask app**

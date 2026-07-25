@@ -42,6 +42,7 @@ gemini_training_data.csv
 
 # Gemini backtest data
 batch_data/
+inference_outputs/
 
 # Frontend dependencies and build artifacts
 node_modules/

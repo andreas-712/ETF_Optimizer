@@ -79,7 +79,7 @@ def _build_gemini_feature_frame(
     Build one validated feature row per ticker and date.
     The score is relevance * polarity * urgency and ranges from -100 to 100.
     The input must contain one row per ticker, date, and prediction horizon.
-    Industry is optional metadata; when present, it is converted to one-hot columns.
+    Industry is optional metadata. When present, it is converted to one-hot columns.
     """
     # 1. Checks for data integrity
     result = pd.DataFrame(gemini_data)
