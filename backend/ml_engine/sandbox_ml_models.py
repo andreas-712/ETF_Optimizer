@@ -2,7 +2,6 @@
 
 from pathlib import Path
 import asyncio
-
 import pandas as pd
 
 from ml_engine.live_inference import get_ticker_pool, predict_tickers
@@ -20,14 +19,14 @@ LIVE_INFERENCE_INPUTS = {
     },
     "sizes": ["big-cap"],
     "blacklisted": [],
-    "min_pool": 10,
-    "max_pool": 10,
+    "min_pool": 5,
+    "max_pool": 15,
 }
 
 # Set one state to "Y" when its workflow is ready to run
 WORKFLOW_STATES = {
     "training": "N",
-    "backtesting_inference": "N",
+    "backtesting_inference": "Y",
     "live_inference": "N",
 }
 
@@ -77,10 +76,9 @@ def run_backtesting_inference() -> None:
     full_df = pd.read_json(TRAINING_FILE_PATH)
     results = []
 
+    # Run inference per timeline given unfiltered training rows (contains all timelines)
     for timeline, _ in MODELS.items():
-        horizon_df = full_df[
-            full_df["prediction_horizon_days"] == timeline
-        ].copy()
+        horizon_df = full_df[full_df["prediction_horizon_days"] == timeline].copy()
         train_df, test_df = chronological_train_test_split(horizon_df, timeline)
 
         return_model = train_return_predictor(
@@ -105,23 +103,18 @@ def run_backtesting_inference() -> None:
                 "test_rows": len(test_df),
                 "test_start_date": test_df["date"].min().date().isoformat(),
                 "test_end_date": test_df["date"].max().date().isoformat(),
-                "return_mae_percent": (
-                    (test_df["future_return_outcome"] - return_predictions)
-                    .abs()
-                    .mean()
-                    * 100
-                ),
-                "volatility_mae_percent": (
-                    (test_df["future_volatility_outcome"] - volatility_predictions)
-                    .abs()
-                    .mean()
-                    * 100
-                ),
+                # MDA % = 1/n * sum(predicted_movement_direction == actual_movement_direction) * 100
+                # Mean directional accuracy measures the rate at which the predicted price direction is correct
+                "return_directional_accuracy_percent": (((test_df["future_return_outcome"] >= 0) == (return_predictions >= 0)).mean() * 100),
+                "volatility_rmse_percent": (((test_df["future_volatility_outcome"] - volatility_predictions).pow(2).mean()) ** 0.5 * 100),
             }
         )
 
     summary = pd.DataFrame(results).round(
-        {"return_mae_percent": 4, "volatility_mae_percent": 4}
+        {
+            "return_directional_accuracy_percent": 4,
+            "volatility_rmse_percent": 4,
+        }
     )
     print("\nChronological backtest results:")
     print(summary.to_string(index=False))

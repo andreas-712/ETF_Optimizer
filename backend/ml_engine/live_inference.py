@@ -19,7 +19,12 @@ from ml_engine.train import build_model_feature_frame, ROLLING_PRICE_WINDOW, ROL
 # SECTORS = {"technology": max_pct, "financial": max_pct, "energy": 1}, where 1 is the uncapped sentinel
 # COMPANY_SIZES = {"big-cap", "mid-cap", "small-cap"}
 
-INDUSTRIES = {"energy", "financial", "technology"}
+# Internal labels are used as model features; Yahoo's screener uses display names.
+YFINANCE_SECTORS = {
+    "energy": "Energy",
+    "financial": "Financial Services",
+    "technology": "Technology",
+}
 SMALL_CAP_LOW = 300_000_000 # $300 million USD
 SMALL_CAP_HIGH = 2_000_000_000 # $2 billion USD
 BIG_CAP_LOW = 10_000_000_000 # $10 billion USD
@@ -65,7 +70,8 @@ async def predict_tickers(
             ticker,
             now_date.strftime("%Y-%m-%d"),
             horizon_days,
-            ticker_gemini_input_data
+            ticker_gemini_input_data,
+            mode="live",
         )
         for ticker, ticker_gemini_input_data in zip(tickers, gemini_input_data)
     ]
@@ -74,11 +80,13 @@ async def predict_tickers(
     valid_gemini_inference_dicts = []
     for gemini_inference_dict in gemini_inference_dicts:
         if len(gemini_inference_dict) != len(GEMINI_RESPONSE_FIELDS):
-            print(f"Invalid field count for {gemini_inference_dict.get("ticker")}")
+            t = gemini_inference_dict.get("ticker")
+            print(f"Invalid field count for {t}")
             continue
         invalid_fields = set(gemini_inference_dict.keys()) - GEMINI_RESPONSE_FIELDS
         if invalid_fields:
-            print(f"Invalid field names for {gemini_inference_dict.get("ticker")}: {invalid_fields}")
+            t = gemini_inference_dict.get("ticker")
+            print(f"Invalid field names for {t}: {invalid_fields}")
             continue
         valid_gemini_inference_dicts.append(gemini_inference_dict)
 
@@ -118,15 +126,22 @@ async def predict_tickers(
 
 def _build_ticker_query(user_inputs: dict, sector: str) -> yf.EquityQuery:
     """Builds the yfinance query for gathering preliminary candidates"""
+    try:
+        yfinance_sector = YFINANCE_SECTORS[sector]
+    except KeyError:
+        allowed_sectors = ", ".join(sorted(YFINANCE_SECTORS))
+        # Prevent exception chaining
+        raise ValueError(f"Unsupported sector {sector!r}; expected one of: {allowed_sectors}") from None
+
     # US-only
     filters = [yf.EquityQuery("eq", ["region", "us"])]
 
     # Add sectors to filter
-    filters.append(yf.EquityQuery("eq", ["sector", sector.capitalize()]))
+    filters.append(yf.EquityQuery("eq", ["sector", yfinance_sector]))
 
     sizes = user_inputs["sizes"]
     if not sizes:
-        print("No company sizes selected")
+        raise ValueError("Select at least one company size")
 
     size_filters = []
     if "big-cap" in sizes:
@@ -136,7 +151,11 @@ def _build_ticker_query(user_inputs: dict, sector: str) -> yf.EquityQuery:
     if "small-cap" in sizes:
         size_filters.append(yf.EquityQuery("btwn", ["intradaymarketcap", SMALL_CAP_LOW, SMALL_CAP_HIGH]))
 
-    filters.append(yf.EquityQuery("or", size_filters))
+    # Allow query to return any valid company size
+    if len(size_filters) == 1:
+        filters.append(size_filters[0])
+    else:
+        filters.append(yf.EquityQuery("or", size_filters))
 
     return yf.EquityQuery("and", filters)
 
@@ -178,7 +197,8 @@ async def get_ticker_pool(user_inputs: dict) -> list:
     selected_pool = []
     sector_pools = []
 
-    for sector, cap in user_inputs["sectors"].items():
+    # Query sector-capped industries first to fill the remainder with remaining sector
+    for sector, cap in sorted(user_inputs["sectors"].items(), key=lambda item: item[1]):
         query = _build_ticker_query(user_inputs, sector)
         screener_data = yf.screen(query, size = clamped_max_pool * 2)
         quotes = screener_data.get("quotes", [])

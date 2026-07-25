@@ -1,8 +1,10 @@
 pandas
+numpy
 scikit-learn
 yfinance
 filterpy
 joblib
 google-genai
+google-auth
 python-dotenv
 requests

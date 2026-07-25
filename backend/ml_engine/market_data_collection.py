@@ -98,41 +98,77 @@ def fetch_ticker_gemini_inputs(ticker: str) -> dict:
 
 
 def _parse_responses(responses: list) -> dict:
-    """
-    Returns a parsed dict for direct extraction for inference
-    """
+    """Returns a parsed dict for direct extraction for inference."""
+    def value_or_nan(field: str, getter):
+        """Fills NaN for any failed metric retrieval"""
+        try:
+            return getter()
+        except KeyError:
+            print(f"Missing live Gemini input field: {field}")
+            return "NaN"
+
     parsed_responses_dict = {}
 
     # 1. Latest Balance Sheet Data (iloc[0] grabs most recent / leftmost col)
     balance_sheet = responses[0]
 
-    parsed_responses_dict["Cash and short term investments"] = balance_sheet.loc[
-        "Cash Cash Equivalents And Short Term Investments"
-    ].iloc[0]
-    parsed_responses_dict["Total current assets"] = balance_sheet.loc[
-        "Current Assets"
-    ].iloc[0]
-    parsed_responses_dict["Total liabilities and total equity"] = balance_sheet.loc[
-        "Total Liabilities Net Minority Interest"
-    ].iloc[0]
-    parsed_responses_dict["Total debt"] = balance_sheet.loc["Total Debt"].iloc[0]
+    parsed_responses_dict["Cash and short term investments"] = value_or_nan(
+        "Cash and short term investments",
+        lambda: balance_sheet.loc["CashCashEquivalentsAndShortTermInvestments"].iloc[0],
+    )
+    parsed_responses_dict["Total current assets"] = value_or_nan(
+        "Total current assets",
+        lambda: balance_sheet.loc["CurrentAssets"].iloc[0],
+    )
+    parsed_responses_dict["Total liabilities and total equity"] = value_or_nan(
+        "Total liabilities and total equity",
+        lambda: balance_sheet.loc["TotalLiabilitiesNetMinorityInterest"].iloc[0],
+    )
+    parsed_responses_dict["Total debt"] = value_or_nan(
+        "Total debt",
+        lambda: balance_sheet.loc["TotalDebt"].iloc[0],
+    )
 
     # 2. Latest analyst ratings
     analyst_ratings = responses[1]
+    try:
+        current_ratings = analyst_ratings[analyst_ratings["period"] == "0m"].iloc[0]
+    except KeyError:
+        print("Missing live Gemini input field: Analyst ratings")
+        current_ratings = {}
 
-    # Filter for the current live period (0m) and convert to a dict
-    current_ratings = analyst_ratings[analyst_ratings["period"] == "0m"].iloc[0]
-
-    parsed_responses_dict["Analyst strong buys"] = current_ratings["strongBuy"]
-    parsed_responses_dict["Analyst buys"] = current_ratings["buy"]
-    parsed_responses_dict["Analyst holds"] = current_ratings["hold"]
-    parsed_responses_dict["Analyst sells"] = current_ratings["sell"]
-    parsed_responses_dict["Analyst strong sells"] = current_ratings["strongSell"]
+    parsed_responses_dict["Analyst strong buys"] = value_or_nan(
+        "Analyst strong buys",
+        lambda: current_ratings["strongBuy"],
+    )
+    parsed_responses_dict["Analyst buys"] = value_or_nan(
+        "Analyst buys",
+        lambda: current_ratings["buy"],
+    )
+    parsed_responses_dict["Analyst holds"] = value_or_nan(
+        "Analyst holds",
+        lambda: current_ratings["hold"],
+    )
+    parsed_responses_dict["Analyst sells"] = value_or_nan(
+        "Analyst sells",
+        lambda: current_ratings["sell"],
+    )
+    parsed_responses_dict["Analyst strong sells"] = value_or_nan(
+        "Analyst strong sells",
+        lambda: current_ratings["strongSell"],
+    )
 
     # 3. Latest stock news
-    parsed_responses_dict["News summaries"] = [
-        "Publisher:" + article["publisher"] + "." + article["title"] for article in responses[2][:8]
-    ]
+    parsed_responses_dict["News summaries"] = value_or_nan(
+        "News summaries",
+        lambda: [
+            "Publisher:"
+            + article["content"]["provider"]["displayName"]
+            + "."
+            + article["content"]["title"]
+            for article in responses[2][:8]
+        ],
+    )
 
     return parsed_responses_dict
 

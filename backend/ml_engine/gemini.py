@@ -7,7 +7,6 @@ This file contains functions and prompts for Gemini inference:
 import json
 import os
 from pathlib import Path
-
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
@@ -17,13 +16,8 @@ BACKEND_DIR = Path(__file__).resolve().parents[1]
 PROJECT_DIR = BACKEND_DIR.parent
 load_dotenv(BACKEND_DIR / ".flaskenv")
 
-LIVE_MODE = "live"
-DATA_MODE = os.getenv("DATA_MODE", "backtest").lower()
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-if not GEMINI_API_KEY:
-    raise ValueError(
-        "No Gemini API key found"
-    )
+GCP_PROJECT_ID = os.getenv("GCP_PROJECT_ID")
+GOOGLE_CLOUD_LOCATION = os.getenv("GOOGLE_CLOUD_LOCATION", "global")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash")
 GEMINI_USE_SEARCH = os.getenv("GEMINI_USE_SEARCH", "false").lower() == "true"
 GEMINI_RESPONSE_FIELDS = {
@@ -35,8 +29,8 @@ GEMINI_RESPONSE_FIELDS = {
   "urgency"
 }
 
-# Initialize the SDK client
-client = genai.Client(api_key=GEMINI_API_KEY)
+# Initialize client using Vertex AI (ADC authentication) 
+client = genai.Client(vertexai = True, project = GCP_PROJECT_ID, location = GOOGLE_CLOUD_LOCATION)
 grounding_tool = types.Tool(google_search=types.GoogleSearch())
 
 BACKTESTING_PROMPT = """You are a quantitative financial data extractor for historical backtesting. Analyze only the provided article summaries, balance sheets, and historical grades for the given stock ticker and requested date, then return one aggregate score for the requested prediction timeline.
@@ -95,23 +89,32 @@ Calibration rules:
 
 Aggregate all relevant events into one final score. Do not return event lists, nested objects, arrays, explanations, markdown or any extra keys."""
 
-if DATA_MODE == LIVE_MODE:
-    SYSTEM_PROMPT = LIVE_PREDICTION_PROMPT
-else:
-    SYSTEM_PROMPT = BACKTESTING_PROMPT
+PROMPTS_BY_MODE = {
+    "backtest": BACKTESTING_PROMPT,
+    "live": LIVE_PREDICTION_PROMPT,
+}
 
 async def fetch_gemini_ticker_inference(
     ticker: str,
     date: str,
     timeline_days: int,
-    ticker_data: dict
+    ticker_data: dict,
+    mode: str,
 ):
-    # Stateless, asynchronous call for a single ticker
+    """Return one Gemini score using the prompt selected for this request."""
     print(f"Dispatching request for {ticker}...")
+
+    try:
+        system_prompt = PROMPTS_BY_MODE[mode]
+    except KeyError:
+        allowed_modes = ", ".join(sorted(PROMPTS_BY_MODE))
+        raise ValueError(
+            f"Unsupported Gemini inference mode {mode!r}; expected one of: {allowed_modes}"
+        ) from None
     
     try:
         config_kwargs = {
-            "system_instruction": SYSTEM_PROMPT,
+            "system_instruction": system_prompt,
             "temperature": 0.0,
             "response_mime_type": "application/json",
         }
