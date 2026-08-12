@@ -12,24 +12,25 @@ from ml_engine.model_orchestrator import MODELS
 from ml_engine.market_data_collection import fetch_numerical_ticker_data, fetch_ticker_gemini_inputs
 from ml_engine.gemini import fetch_gemini_ticker_inference, GEMINI_RESPONSE_FIELDS
 from ml_engine.train import build_model_feature_frame, ROLLING_PRICE_WINDOW, ROLLING_VOLATILITY_WINDOW
+from ml_engine.exceptions import userInputError
+from ml_engine.model_orchestrator import load_models
 
 # Can choose multiple sectors, company sizes, and blacklisted tickers
 # USER_INPUTS = ["sectors", "company_sizes", "risk_tolerance", "blacklisted", "max_pool", "min_pool"]
 # RISK_TOLERANCES = {"high", "medium", "low"}
 # SECTORS = {"technology": max_pct, "financial": max_pct, "energy": 1}, where 1 is the uncapped sentinel
-# COMPANY_SIZES = {"big-cap", "mid-cap", "small-cap"}
 
-# Internal labels are used as model features; Yahoo's screener uses display names.
 YFINANCE_SECTORS = {
     "energy": "Energy",
     "financial": "Financial Services",
     "technology": "Technology",
 }
+COMPANY_SIZES = {"big-cap", "mid-cap", "small-cap"}
 SMALL_CAP_LOW = 300_000_000 # $300 million USD
 SMALL_CAP_HIGH = 2_000_000_000 # $2 billion USD
 BIG_CAP_LOW = 10_000_000_000 # $10 billion USD
 MIN_POOL_LOW_BOUND = 10
-MAX_POOL_UPPER_BOUND = 50
+MAX_POOL_UPPER_BOUND = 100
 
 
 async def predict_tickers(
@@ -120,6 +121,49 @@ async def predict_tickers(
             "return": float(return_pcts[index]),
             "horizon_days": horizon_days
         }
+
+    return predictions
+
+
+def run_live_inference(live_inputs: dict) -> dict:
+    """
+    Select live candidates, predict their returns and volatility, and print them.
+    Master function which returns all predictions with the given user input parameters.
+    """
+    if live_inputs["horizon_days"] not in MODELS:
+        raise userInputError("Invalid input horizon")
+    if not live_inputs["sectors"] or not set(live_inputs["sectors"].keys()).issubset(YFINANCE_SECTORS.keys()):
+        raise userInputError("Missing or invalid sector(s) given")
+    if not live_inputs["sizes"] or not set(live_inputs["sizes"]).issubset(COMPANY_SIZES):
+        raise userInputError("Missing or invalid size(s) given")
+    if live_inputs["min_pool"] < MIN_POOL_LOW_BOUND or live_inputs["max_pool"] > MAX_POOL_UPPER_BOUND or live_inputs["min_pool"] > live_inputs["max_pool"]:
+        raise userInputError("Invalid pool size bound(s)")
+    # Min/max now validated
+    s = 0
+    ones = 0
+    for _, val in live_inputs["sectors"].items():
+        if 1 > val > (1. - 1. / live_inputs["max_pool"]) or val < (1. / live_inputs["max_pool"]): # Dynamic bounds based on granularity
+            raise userInputError("Invalid bounds: over")
+        if val == 1:
+            ones += 1
+        s += val
+    if ones != 1:
+        raise userInputError("Need exactly one value of 1 assigned to a sector to fill")
+    if s < 1 or s >= (2 - 1 / (live_inputs["max_pool"])):
+        raise userInputError("Incorrect ETF sector(s) composition given")
+    
+    load_models()
+    candidates = asyncio.run(get_ticker_pool(live_inputs))
+    ticker_industries = {
+        candidate["ticker"]: candidate["industry"]
+        for candidate in candidates
+    }
+    predictions = asyncio.run( 
+        predict_tickers(
+            live_inputs["horizon_days"],
+            ticker_industries,
+        )
+    )
 
     return predictions
 

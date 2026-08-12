@@ -172,23 +172,3 @@ def _parse_responses(responses: list) -> dict:
 
     return parsed_responses_dict
 
-
-def _binary_search_index(dates: list, target: str) -> int | None:
-    """
-    Returns index of most recent index up to target date. Assumes newest to oldest order
-    """
-    l, r = 0, len(dates)-1
-    dt_target = dt.datetime.strptime(target, "%Y-%m-%d")
-    result = None
-
-    while l <= r:
-        mid = (l+r) // 2
-        dt_mid = dt.datetime.strptime(dates[mid], "%Y-%m-%d")
-
-        if dt_mid <= dt_target:
-            result = mid
-            r = mid - 1
-        else:
-            l = mid + 1
-
-    return result

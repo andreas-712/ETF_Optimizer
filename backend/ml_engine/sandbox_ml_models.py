@@ -4,7 +4,7 @@ from pathlib import Path
 import asyncio
 import pandas as pd
 
-from ml_engine.live_inference import get_ticker_pool, predict_tickers
+from ml_engine.live_inference import predict_tickers, run_live_inference
 from ml_engine.model_orchestrator import MODELS, load_models
 from ml_engine.predictor import FEATURE_COLUMNS
 from ml_engine.train import train_return_predictor, train_volatility_predictor
@@ -19,15 +19,27 @@ LIVE_INFERENCE_INPUTS = {
     },
     "sizes": ["big-cap"],
     "blacklisted": [],
-    "min_pool": 5,
-    "max_pool": 15,
+    "min_pool": 10,
+    "max_pool": 30,
 }
+# Add or remove ticker: industry pairs here for direct live predictions.
+DIRECT_TICKER_INDUSTRIES = {
+    "NBIS": "technology",
+    "TER": "technology",
+    "PLUG": "energy",
+    "SOFI": "technology",
+    "HOOD": "technology",
+    "MU": "technology",
+}
+
+DIRECT_TICKER_HORIZON_DAYS = 20
 
 # Set one state to "Y" when its workflow is ready to run
 WORKFLOW_STATES = {
     "training": "N",
-    "backtesting_inference": "Y",
+    "backtesting_inference": "N",
     "live_inference": "N",
+    "direct_ticker_inference": "Y",
 }
 
 
@@ -71,7 +83,7 @@ def chronological_train_test_split(
     return train_df, test_df
 
 
-def run_backtesting_inference() -> None:
+def run_backtesting_inference() -> pd.DataFrame:
     """Train on earlier data and print accuracy with future data."""
     full_df = pd.read_json(TRAINING_FILE_PATH)
     results = []
@@ -116,27 +128,35 @@ def run_backtesting_inference() -> None:
             "volatility_rmse_percent": 4,
         }
     )
-    print("\nChronological backtest results:")
-    print(summary.to_string(index=False))
+    
+    return summary
 
 
-def run_live_inference() -> None:
-    """Select live candidates, predict their returns and volatility, and print them."""
+
+def run_direct_ticker_inference(ticker_industries, ticker_horizon) -> dict:
+    """Predict the configured ticker: industry pairs without screening a pool."""
+    if not ticker_industries:
+        print("No direct ticker: industry pairs were configured.")
+        return
+
     load_models()
-    candidates = asyncio.run(get_ticker_pool(LIVE_INFERENCE_INPUTS))
-    ticker_industries = {
-        candidate["ticker"]: candidate["industry"]
-        for candidate in candidates
-    }
     predictions = asyncio.run(
         predict_tickers(
-            LIVE_INFERENCE_INPUTS["horizon_days"],
+            ticker_horizon,
             ticker_industries,
         )
     )
 
+    return predictions
+
+
+def print_predictions(
+    heading: str,
+    predictions: dict[str, dict[str, float | int]],
+) -> None:
+    """Print live prediction results in a consistent tabular format."""
     if not predictions:
-        print("No live predictions were returned.")
+        print(f"No {heading.lower()} were returned.")
         return
 
     rows = [
@@ -146,7 +166,7 @@ def run_live_inference() -> None:
     results = pd.DataFrame(rows).sort_values("ticker").round(
         {"return": 4, "volatility": 4}
     )
-    print("\nLive predictions:")
+    print(f"\n{heading}:")
     print(results.to_string(index=False))
 
 
@@ -156,10 +176,17 @@ def main() -> None:
         run_training()
 
     if WORKFLOW_STATES["backtesting_inference"] == "Y":
-        run_backtesting_inference()
+        df_summary = run_backtesting_inference()
+        print("\nChronological backtest results:")
+        print(df_summary.to_string(index = False))
 
     if WORKFLOW_STATES["live_inference"] == "Y":
-        run_live_inference()
+        preds = run_live_inference(LIVE_INFERENCE_INPUTS)
+        print_predictions("Live predictions", preds)
+
+    if WORKFLOW_STATES["direct_ticker_inference"] == "Y":
+        preds = run_direct_ticker_inference(DIRECT_TICKER_INDUSTRIES, DIRECT_TICKER_HORIZON_DAYS)
+        print_predictions("Direct ticker predictions", preds)
 
 
 if __name__ == "__main__":
