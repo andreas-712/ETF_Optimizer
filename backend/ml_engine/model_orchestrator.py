@@ -16,6 +16,7 @@ from ml_engine.train import (
     save_model,
 )
 from ml_engine.predictor import select_inference_features, FEATURE_COLUMNS
+from ml_engine.exceptions import faultyDatasetError
 
 SAVED_MODEL_DIR = Path(__file__).resolve().parent / "saved_models"
 
@@ -38,15 +39,11 @@ class TimelineModel:
         }
         missing_columns = required_columns - set(training_df.columns)
         if missing_columns:
-            raise ValueError(
-                f"Flattened training frame is missing columns: {sorted(missing_columns)}"
-            )
+            raise faultyDatasetError(f"Flattened training frame is missing columns: {sorted(missing_columns)}")
 
         training_horizons = set(training_df["prediction_horizon_days"].unique())
         if training_horizons != {self.timeline_days}:
-            raise ValueError(
-                f"Training frame must contain only the model's prediction horizon ({self.timeline_days}); received {sorted(training_horizons)}"
-            )
+            raise faultyDatasetError(f"Training frame must contain only the model's prediction horizon ({self.timeline_days}); received {sorted(training_horizons)}")
 
         self.return_model = train_return_predictor(
             training_df,

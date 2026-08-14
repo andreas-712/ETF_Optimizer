@@ -8,12 +8,11 @@ from zoneinfo import ZoneInfo # Standardized to ny time
 import yfinance as yf
 import asyncio
 
-from ml_engine.model_orchestrator import MODELS
+from ml_engine.model_orchestrator import MODELS, load_models
 from ml_engine.market_data_collection import fetch_numerical_ticker_data, fetch_ticker_gemini_inputs
 from ml_engine.gemini import fetch_gemini_ticker_inference, GEMINI_RESPONSE_FIELDS
 from ml_engine.train import build_model_feature_frame, ROLLING_PRICE_WINDOW, ROLLING_VOLATILITY_WINDOW
 from ml_engine.exceptions import userInputError
-from ml_engine.model_orchestrator import load_models
 
 # Can choose multiple sectors, company sizes, and blacklisted tickers
 # USER_INPUTS = ["sectors", "company_sizes", "risk_tolerance", "blacklisted", "max_pool", "min_pool"]
@@ -35,7 +34,7 @@ MAX_POOL_UPPER_BOUND = 100
 
 async def predict_tickers(
     horizon_days: int,
-    ticker_industries: dict[str, str],
+    ticker_sectors: dict[str, str],
 ) -> dict[str, dict[str, float | int]]:
     """
     Master async function for returning volatility and percent change data over the given horizon.
@@ -47,7 +46,7 @@ async def predict_tickers(
         print(f"Prediction horizon {horizon_days} unavailable")
         return  {}
 
-    tickers = list(ticker_industries)
+    tickers = list(ticker_sectors)
 
     # Record current date
     now = dt.datetime.now(ZoneInfo("America/New_York"))
@@ -108,7 +107,7 @@ async def predict_tickers(
     )
     # Return only latest (live) row for each ticker
     live_input_frame = ml_processed_input_frame.groupby("ticker", group_keys = False).tail(1).copy()
-    live_input_frame["industry"] = live_input_frame["ticker"].map(ticker_industries)
+    live_input_frame["sector"] = live_input_frame["ticker"].map(ticker_sectors)
 
     # Load and predict
     prediction_model = MODELS[horizon_days]
@@ -156,19 +155,19 @@ def run_live_inference(live_inputs: dict) -> dict:
     
     load_models()
     candidates = asyncio.run(get_ticker_pool(live_inputs))
-    ticker_industries = {
-        candidate["ticker"]: candidate["industry"]
+    ticker_sectors = {
+        candidate["ticker"]: candidate["sector"]
         for candidate in candidates
     }
     predictions = asyncio.run(
         predict_tickers(
             live_inputs["horizon_days"],
-            ticker_industries,
+            ticker_sectors,
         )
     )
     candidate_metadata = {
         candidate["ticker"]: {
-            "industry": candidate["industry"],
+            "sector": candidate["sector"],
             "market_cap_category": candidate["market_cap_category"],
         }
         for candidate in candidates
@@ -272,7 +271,7 @@ async def get_ticker_pool(user_inputs: dict) -> list:
     selected_pool = []
     sector_pools = []
 
-    # Query sector-capped industries first to fill the remainder with remaining sector
+    # Query sector-capped candidates first to fill the remainder with the remaining sector
     for sector, cap in sorted(user_inputs["sectors"].items(), key=lambda item: item[1]):
         query = _build_ticker_query(user_inputs, sector)
         screener_data = yf.screen(query, size = clamped_max_pool * 2)
@@ -292,7 +291,7 @@ async def get_ticker_pool(user_inputs: dict) -> list:
         sector_pool = [
             {
                 "ticker": candidate["ticker"],
-                "industry": sector,
+                "sector": sector,
                 "market_cap_category": _market_cap_category(candidate["market_cap"]),
                 "score": score,
             }
@@ -323,7 +322,7 @@ async def get_ticker_pool(user_inputs: dict) -> list:
     return [
         {
             "ticker": row["ticker"],
-            "industry": row["industry"],
+            "sector": row["sector"],
             "market_cap_category": row["market_cap_category"],
         }
         for row in selected_pool[:clamped_max_pool]

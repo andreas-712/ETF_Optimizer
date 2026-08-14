@@ -8,6 +8,7 @@ from ml_engine.live_inference import predict_tickers, run_live_inference
 from ml_engine.model_orchestrator import MODELS, load_models
 from ml_engine.predictor import FEATURE_COLUMNS
 from ml_engine.train import train_return_predictor, train_volatility_predictor
+from ml_engine.exceptions import datasetFormationError, faultyDatasetError
 
 TRAINING_FILE_PATH = Path(__file__).resolve().parent / "batch_data" / "training_file.json"
 BACKTEST_TEST_SIZE = 0.20
@@ -22,8 +23,8 @@ LIVE_INFERENCE_INPUTS = {
     "min_pool": 10,
     "max_pool": 30,
 }
-# Add or remove ticker: industry pairs here for direct live predictions.
-DIRECT_TICKER_INDUSTRIES = {
+# Add or remove ticker: sector pairs here for direct live predictions.
+DIRECT_TICKER_SECTORS = {
     "NBIS": "technology",
     "TER": "technology",
     "PLUG": "energy",
@@ -62,14 +63,14 @@ def chronological_train_test_split(
     The df should include the model features and both future outcome columns.
     """
     if not 0 < test_size < 1:
-        raise ValueError("Backtest test_size must be between 0 and 1")
+        raise datasetFormationError("Backtest test_size must be between 0 and 1")
 
     result = df.copy()
     result["date"] = pd.to_datetime(result["date"])
     unique_dates = sorted(result["date"].unique())
     cutoff_index = int(len(unique_dates) * (1 - test_size))
     if cutoff_index == 0 or cutoff_index >= len(unique_dates):
-        raise ValueError("Not enough distinct dates for a chronological train/test split")
+        raise datasetFormationError("Not enough distinct dates for a chronological train/test split")
 
     cutoff_date = unique_dates[cutoff_index]
     embargo_index = max(0, cutoff_index - horizon_days)
@@ -78,7 +79,7 @@ def chronological_train_test_split(
     test_df = result[result["date"] >= cutoff_date].copy()
 
     if train_df.empty or test_df.empty:
-        raise ValueError("Chronological split produced an empty train or test set")
+        raise datasetFormationError("Chronological split produced an empty train or test set")
 
     return train_df, test_df
 
@@ -133,17 +134,17 @@ def run_backtesting_inference() -> pd.DataFrame:
 
 
 
-def run_direct_ticker_inference(ticker_industries, ticker_horizon) -> dict:
-    """Predict the configured ticker: industry pairs without screening a pool."""
-    if not ticker_industries:
-        print("No direct ticker: industry pairs were configured.")
+def run_direct_ticker_inference(ticker_sectors, ticker_horizon) -> dict:
+    """Predict the configured ticker: sector pairs without screening a pool."""
+    if not ticker_sectors:
+        print("No direct ticker: sector pairs were configured.")
         return
 
     load_models()
     predictions = asyncio.run(
         predict_tickers(
             ticker_horizon,
-            ticker_industries,
+            ticker_sectors,
         )
     )
 
@@ -185,7 +186,7 @@ def main() -> None:
         print_predictions("Live predictions", preds)
 
     if WORKFLOW_STATES["direct_ticker_inference"] == "Y":
-        preds = run_direct_ticker_inference(DIRECT_TICKER_INDUSTRIES, DIRECT_TICKER_HORIZON_DAYS)
+        preds = run_direct_ticker_inference(DIRECT_TICKER_SECTORS, DIRECT_TICKER_HORIZON_DAYS)
         print_predictions("Direct ticker predictions", preds)
 
 

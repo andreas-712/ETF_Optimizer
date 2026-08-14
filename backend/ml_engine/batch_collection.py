@@ -2,7 +2,7 @@
 This file contains functions for the historical batch collection flow:
     - Collecting numerical prices, article summaries, balance sheets, and grades
     - Filtering summaries and producing Gemini batch requests for model training
-    - Extracting and one-hot-encoding batch inference outputs based on industry
+    - Extracting and one-hot-encoding batch inference outputs based on sector
     - Creating final dataset file for ML model training
 
 File writes under batch_data/
@@ -379,9 +379,9 @@ def produce_training_batch() -> None:
 
         print(f"Batch inference data written to {BATCH_INFERENCE_DATA_OUTPUT_PATH}")
 
-def extract_inferences(industry: str, file_path: Path) -> list[dict]:
+def extract_inferences(sector: str, file_path: Path) -> list[dict]:
     """
-    Extract valid Gemini outputs from one industry batch file.
+    Extract valid Gemini outputs from one sector batch file.
     Each returned row is identified by ticker, date, and prediction horizon.
     """
     extracted_inferences = []
@@ -400,7 +400,7 @@ def extract_inferences(industry: str, file_path: Path) -> list[dict]:
                 print(f"Invalid Gemini fields in {file_path.name} on line {line_number}")
                 continue
 
-            inference["industry"] = industry
+            inference["sector"] = sector
             extracted_inferences.append(inference)
 
     return extracted_inferences
@@ -495,8 +495,8 @@ def main():
 
     if COLLECTION_STATES["extract_inferences"] == "Y":
         extracted_inferences = []
-        for industry, file_path in BATCH_INFERENCE_OUTPUT_PATHS.items():
-            extracted_inferences.extend(extract_inferences(industry, file_path))
+        for sector, file_path in BATCH_INFERENCE_OUTPUT_PATHS.items():
+            extracted_inferences.extend(extract_inferences(sector, file_path))
 
         extracted_inferences.sort(
             key = lambda row: (

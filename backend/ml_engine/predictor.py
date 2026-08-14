@@ -8,38 +8,38 @@ import pandas as pd
 
 
 # Keep feature column names standardized across modules (source of truth)
-INDUSTRY_FEATURE_COLUMNS = [
+SECTOR_FEATURE_COLUMNS = [
     "energy",
     "financial",
     "technology",
 ]
-INDUSTRIES = {"energy", "financial", "technology"}
+SECTORS = {"energy", "financial", "technology"}
 
 FEATURE_COLUMNS = [
     "price_trend_deviation",
     "rolling_volatility",
     "gemini_sentiment_score",
-    *INDUSTRY_FEATURE_COLUMNS,
+    *SECTOR_FEATURE_COLUMNS,
 ]
 
 
-def add_industry_features(df: pd.DataFrame) -> pd.DataFrame:
-    """Add model-ready industry feature columns."""
+def add_sector_features(df: pd.DataFrame) -> pd.DataFrame:
+    """Add model-ready sector feature columns."""
     result = df.copy()
-    for column in INDUSTRY_FEATURE_COLUMNS:
+    for column in SECTOR_FEATURE_COLUMNS:
         if column not in result.columns:
             result[column] = 0
 
-    if "industry" in result.columns:
-        normalized_industries = result["industry"].astype(str).str.lower()
-        for industry in INDUSTRIES:
-            # Finds and sets all matching values to 1 for each industry
-            result.loc[normalized_industries == industry, industry] = 1
+    if "sector" in result.columns:
+        normalized_sectors = result["sector"].astype(str).str.lower()
+        for sector in SECTORS:
+            # Finds and sets all matching values to 1 for each sector
+            result.loc[normalized_sectors == sector, sector] = 1
 
     return result
 
 
 def select_inference_features(df: pd.DataFrame) -> pd.DataFrame:
     """Return processed feature columns for the ML models"""
-    result = add_industry_features(df)
+    result = add_sector_features(df)
     return result[FEATURE_COLUMNS]

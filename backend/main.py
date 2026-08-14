@@ -5,40 +5,52 @@ Run from backend/ with virtual env activated (with dependencies installed):
 python main.py \
   --file_name {str} \
   --horizon_days {int} \
-  --sector {string}={float} \
-  --sector {string}={float} \
-  --sector {string}={float} \
-  --size {str} \
-  --size {str} \
-  --size {str} \
-  --exclude {str} \
-  --exclude {str} \
+  --sector {str1}={float1} {str2}={float2} ... \
+  --size {str1} {str2} ... \
+  --exclude {str1} {str2} ... \
   --min_pool {int} \
   --max_pool {int} \
   --risk_tolerance {str}
 
-Note: at least one argument is needed for each argument type, additional is optional. Do not zero-out excluded sectors
+Note: at least one argument is needed for each argument type except for "exclude", additional is optional. Do not zero-out excluded sectors
 """
 
 import argparse
 from collections import defaultdict
 import math
 from pathlib import Path
-
 import matplotlib.pyplot as plt
+
 
 RESULTS_PATH = Path(__file__).resolve().parent / "etf_output_files"
 
-def shape_ml_inputs(args: argparse.Namespace) -> dict:
-    pass
-def return_optimized_etf(ml_inputs: dict, risk_tolerance: str) -> dict:
-    pass
-def output_results_file(results: dict[str, dict], path: Path) -> None:
-    """Save a portfolio report from ticker -> prediction and allocation`` records.
 
-    Each record must contain weight, return, volatility, sector,
-    and market_cap_category. Weights are decimal portfolio weights and must
-    sum to 1.0.
+def return_optimized_etf(ml_inputs: dict, risk_tolerance: str) -> dict:
+    """To be implemented in math_engine/"""
+    pass
+
+def shape_user_inputs(args: argparse.Namespace) -> dict:
+    """Shapes the user inputs for ml ticker collection and inference, and a component in ETF composition function."""
+    live_inference_inputs = {}
+
+    live_inference_inputs["horizon_days"] = args.horizon_days
+    sect_mapping = {}
+    for s in list(args.sector):
+        sect, cap = s.split("=", 1)
+        sect_mapping[sect] = float(cap)
+    live_inference_inputs["sectors"] = sect_mapping
+    live_inference_inputs["sizes"] = list(args.size)
+    live_inference_inputs["blacklisted"] = list(args.exclude) or []
+    live_inference_inputs["min_pool"] = int(args.min_pool)
+    live_inference_inputs["max_pool"] = int(args.max_pool)
+
+    return live_inference_inputs
+
+def output_results_file(results: dict[str, dict], path: Path) -> None:
+    """Save a portfolio report from ticker to prediction and composition records.
+
+    Each record must contain weight, return, volatility, sector, and market_cap_category. 
+    Weights are decimal portfolio weights and must sum to 1.0.
     """
     required_fields = {
         "weight",
@@ -143,18 +155,18 @@ def main():
         description = "Return a tailored optimized ETF portfolio"
     )
 
-    parser.add_argument("--file_name", type = str)
-    parser.add_argument("--horizon_days", type = int)
-    parser.add_argument("--sector", type = str, nargs = "+")
-    parser.add_argument("--size", type = str, nargs = "+")
-    parser.add_argument("--exclude", type = str)
-    parser.add_argument("--min_pool", type = int)
-    parser.add_argument("--max_pool", type = int)
-    parser.add_argument("--risk_tolerance", type = str)
+    parser.add_argument("--file_name", type = str, required = True)
+    parser.add_argument("--horizon_days", type = int, required = True)
+    parser.add_argument("--sector", type = str, nargs = "+", required = True)
+    parser.add_argument("--size", type = str, nargs = "+", required = True)
+    parser.add_argument("--exclude", type = str, nargs = "+", default = [])
+    parser.add_argument("--min_pool", type = int, required = True)
+    parser.add_argument("--max_pool", type = int, required = True)
+    parser.add_argument("--risk_tolerance", type = str, required = True)
 
     args = parser.parse_args()
 
-    ml_inputs = shape_ml_inputs(args)
+    ml_inputs = shape_user_inputs(args)
 
     results = return_optimized_etf(ml_inputs, args.risk_tolerance)
 
