@@ -37,7 +37,7 @@ def output_results_file(results: dict[str, dict], path: Path) -> None:
     """Save a portfolio report from ticker -> prediction and allocation`` records.
 
     Each record must contain weight, return, volatility, sector,
-    and ``market_cap_category``. Weights are decimal portfolio weights and must
+    and market_cap_category. Weights are decimal portfolio weights and must
     sum to 1.0.
     """
     required_fields = {

@@ -41,6 +41,7 @@ async def predict_tickers(
     Master async function for returning volatility and percent change data over the given horizon.
     Returns volatility pct, return pct, horizon days for each ticker.
     Contains values {ticker: {volatility: float, return: float, horizon_days: int}}
+    **Note: Only explicitly used for predicting tickers directly. Not to be used directly in ETF creation function.
     """
     if horizon_days not in MODELS:
         print(f"Prediction horizon {horizon_days} unavailable")
@@ -129,6 +130,7 @@ def run_live_inference(live_inputs: dict) -> dict:
     """
     Select live candidates, predict their returns and volatility, and print them.
     Master function which returns all predictions with the given user input parameters.
+    **Note: to be used in main.py for model prediction (with ticker sector and cap metadata), but not in ETF creation function.
     """
     if live_inputs["horizon_days"] not in MODELS:
         raise userInputError("Invalid input horizon")
