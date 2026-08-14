@@ -4,6 +4,7 @@ scikit-learn
 yfinance
 filterpy
 joblib
+matplotlib
 google-genai
 google-auth
 python-dotenv

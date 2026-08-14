@@ -35,7 +35,7 @@ MAX_POOL_UPPER_BOUND = 100
 
 async def predict_tickers(
     horizon_days: int,
-    ticker_industries: dict[str, str]
+    ticker_industries: dict[str, str],
 ) -> dict[str, dict[str, float | int]]:
     """
     Master async function for returning volatility and percent change data over the given horizon.
@@ -119,7 +119,7 @@ async def predict_tickers(
         predictions[ticker] = {
             "volatility": float(volatility_pcts[index]),
             "return": float(return_pcts[index]),
-            "horizon_days": horizon_days
+            "horizon_days": horizon_days,
         }
 
     return predictions
@@ -158,12 +158,21 @@ def run_live_inference(live_inputs: dict) -> dict:
         candidate["ticker"]: candidate["industry"]
         for candidate in candidates
     }
-    predictions = asyncio.run( 
+    predictions = asyncio.run(
         predict_tickers(
             live_inputs["horizon_days"],
             ticker_industries,
         )
     )
+    candidate_metadata = {
+        candidate["ticker"]: {
+            "industry": candidate["industry"],
+            "market_cap_category": candidate["market_cap_category"],
+        }
+        for candidate in candidates
+    }
+    for ticker, prediction in predictions.items():
+        prediction.update(candidate_metadata[ticker])
 
     return predictions
 
@@ -213,7 +222,7 @@ def _sync_fetch(ticker: str):
         return None
         
 async def _fetch_analyst_ratings(symbol: str) -> float:
-    """Asynchronously retrieves aggregated analyst rating scores for preliminary ticker filtering"""
+    """Asynchronously retrieves aggregated analyst rating scores for preliminary ticker filtering."""
     df = await asyncio.to_thread(_sync_fetch, symbol)
     if df is None or df.empty or "period" not in df.columns:
         return -999.0 # Sentinel value
@@ -227,6 +236,26 @@ async def _fetch_analyst_ratings(symbol: str) -> float:
     bearish_signals = (row.get('strongSell') * 2) + (row.get('sell') * 1)
 
     return float(bullish_signals - bearish_signals)
+
+
+def _get_market_cap(quote: dict) -> float | None:
+    """Return Yahoo's market-cap value."""
+    for field in ("intradayMarketCap", "intradaymarketcap", "marketCap"):
+        value = quote.get(field)
+        if value is not None:
+            return float(value)
+    return None
+
+
+def _market_cap_category(market_cap: float | None) -> str | None:
+    """Map a market-cap value to the size buckets used by the screener."""
+    if market_cap is None:
+        return None
+    if market_cap < SMALL_CAP_HIGH:
+        return "small-cap"
+    if market_cap < BIG_CAP_LOW:
+        return "mid-cap"
+    return "big-cap"
 
 async def get_ticker_pool(user_inputs: dict) -> list:
     """Returns up to the max pool sector-limited candidates."""
@@ -247,19 +276,25 @@ async def get_ticker_pool(user_inputs: dict) -> list:
         screener_data = yf.screen(query, size = clamped_max_pool * 2)
         quotes = screener_data.get("quotes", [])
         candidates = [
-            quote["symbol"]
+            {
+                "ticker": quote["symbol"],
+                "market_cap": _get_market_cap(quote),
+            }
             for quote in quotes
             if "symbol" in quote and quote["symbol"] not in user_inputs["blacklisted"]
         ]
 
-        scores = await asyncio.gather(*[_fetch_analyst_ratings(ticker) for ticker in candidates])
+        scores = await asyncio.gather(
+            *[_fetch_analyst_ratings(candidate["ticker"]) for candidate in candidates]
+        )
         sector_pool = [
             {
-                "ticker": ticker,
+                "ticker": candidate["ticker"],
                 "industry": sector,
+                "market_cap_category": _market_cap_category(candidate["market_cap"]),
                 "score": score,
             }
-            for ticker, score in zip(candidates, scores)
+            for candidate, score in zip(candidates, scores)
         ]
         sector_pool.sort(key = lambda row: row["score"], reverse = True)
         sector_pools.append(sector_pool)
@@ -284,6 +319,10 @@ async def get_ticker_pool(user_inputs: dict) -> list:
         selected_pool.extend(remaining_candidates[:required_candidates])
 
     return [
-        {"ticker": row["ticker"], "industry": row["industry"]}
+        {
+            "ticker": row["ticker"],
+            "industry": row["industry"],
+            "market_cap_category": row["market_cap_category"],
+        }
         for row in selected_pool[:clamped_max_pool]
     ]
