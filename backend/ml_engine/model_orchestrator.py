@@ -16,7 +16,7 @@ from ml_engine.train import (
     save_model,
 )
 from ml_engine.predictor import select_inference_features, FEATURE_COLUMNS
-from ml_engine.exceptions import faultyDatasetError
+from ml_engine.exceptions import faultyDatasetError, modelConfigurationError
 
 SAVED_MODEL_DIR = Path(__file__).resolve().parent / "saved_models"
 
@@ -74,15 +74,13 @@ class TimelineModel:
 
     def return_inference(self, processed_df: pd.DataFrame) -> np.ndarray:
         if self.return_model == None:
-            print(f"Return model for {self.timeline_days} day horizons not loaded yet\n")
-            return np.array([])
+            raise modelConfigurationError(f"Return model for {self.timeline_days} day horizons not loaded yet\n")
         X = select_inference_features(processed_df)
         return self.return_model.predict(X)
     
     def volatility_inference(self, processed_df: pd.DataFrame) -> np.ndarray:
         if self.volatility_model == None:
-            print(f"Volatility model for {self.timeline_days} day horizons not loaded yet\n")
-            return np.array([])
+            raise modelConfigurationError(f"Volatility model for {self.timeline_days} day horizons not loaded yet\n")
         X = select_inference_features(processed_df)
         return self.volatility_model.predict(X)
 

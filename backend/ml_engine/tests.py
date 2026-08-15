@@ -10,9 +10,21 @@ From backend/, run:
 """
 
 import pytest as t
+import json
+import datetime as dt
+
 from ml_engine.sandbox_ml_models import run_backtesting_inference, run_direct_ticker_inference
 from ml_engine.exceptions import userInputError
 from ml_engine.live_inference import run_live_inference, MIN_POOL_LOW_BOUND, MAX_POOL_UPPER_BOUND
+from ml_engine.batch_collection import (
+    TRAINING_FILE_OUTPUT_PATH,
+    NUMERICAL_DATA_OUTPUT_PATHS,
+    START_DATE,
+    END_DATE,
+)
+from ml_engine.model_orchestrator import MODELS
+
+TRAINING_FILE = TRAINING_FILE_OUTPUT_PATH # Current training file to test
 
 
 """
@@ -234,7 +246,7 @@ def test_invalid_upper_bound():
     "min_pool": MIN_POOL_LOW_BOUND,
     "max_pool": MAX_POOL_UPPER_BOUND + 1,
 })
-
+        
 # Live API call to yfinance and GCP
 @t.mark.integration
 def test_validate_output_live():
@@ -251,3 +263,63 @@ def test_validate_output_live():
 }))
     assert size <= MAX_POOL_UPPER_BOUND # Min is not guaranteed
 
+
+"""     
+----------------------------------ML model invariant tests (backtesting)----------------------------------
+"""
+
+def test_gemini_aggregate_scores():
+    with open(TRAINING_FILE, "r", encoding = "utf-8") as f:
+        data = json.load(f)
+        for row in data:
+            assert -100 < row["gemini_sentiment_score"] < 100
+
+def test_prediction_horizons():
+    with open(TRAINING_FILE, "r", encoding = "utf-8") as f:
+        data = json.load(f)
+        for row in data:
+            assert row["prediction_horizon_days"] in MODELS
+
+def test_batch_dates():
+    with open(TRAINING_FILE, "r", encoding = "utf-8") as file:
+        data = json.load(file)
+        for row in data:
+            assert START_DATE <= dt.date.fromisoformat(row["date"]) < END_DATE
+
+def test_future_return_outcomes_match_numerical_source_data():
+    """Training return outcomes must match historical source file price data"""
+    prices_by_ticker = {}
+    for file_path in NUMERICAL_DATA_OUTPUT_PATHS.values():
+        with open(file_path, "r", encoding = "utf-8") as source_file:
+            for source_row in json.load(source_file):
+                prices_by_ticker.setdefault(source_row["ticker"], {})[
+                    dt.date.fromisoformat(source_row["date"])
+                ] = float(source_row["adjusted_close"])
+
+    with open(TRAINING_FILE, "r", encoding = "utf-8") as training_file:
+        training_rows = {
+            (row["ticker"], dt.date.fromisoformat(row["date"]), row["prediction_horizon_days"]): row
+            for row in json.load(training_file)
+        }
+
+    final_date = END_DATE + dt.timedelta(days = max(MODELS))
+    for ticker, trading_prices in prices_by_ticker.items():
+        calendar_prices = {}
+        latest_price = None # Keep track of latest trading day price to lookup forward-filled date in training file
+        current_date = min(trading_prices)
+
+        while current_date <= final_date:
+            latest_price = trading_prices.get(current_date, latest_price)
+            calendar_prices[current_date] = latest_price
+            current_date += dt.timedelta(days=1)
+
+        current_date = START_DATE
+        while current_date < END_DATE:
+            for horizon_days in MODELS:
+                row = training_rows.get((ticker, current_date, horizon_days))
+                if row: # Some non-trading days dropped over shorter horizons, and Gemini response integrity
+                    expected_return = (
+                        calendar_prices[current_date + dt.timedelta(days=horizon_days)]
+                        / calendar_prices[current_date]) - 1
+                    assert row["future_return_outcome"] == t.approx(expected_return, rel = 1e-12, abs = 1e-12)
+            current_date += dt.timedelta(days = 1)
