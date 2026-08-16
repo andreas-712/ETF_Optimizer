@@ -9,3 +9,5 @@ google-genai
 google-auth
 python-dotenv
 requests
+numpy
+scipy

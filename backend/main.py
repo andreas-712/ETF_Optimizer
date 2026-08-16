@@ -10,7 +10,8 @@ python main.py \
   --exclude {str1} {str2} ... \
   --min_pool {int} \
   --max_pool {int} \
-  --risk_tolerance {str}
+  --risk_tolerance {str} \
+  --max_single_weight {float}
 
 Note: at least one argument is needed for each argument type except for "exclude", additional is optional. Do not zero-out excluded sectors
 """
@@ -21,13 +22,15 @@ import math
 from pathlib import Path
 import matplotlib.pyplot as plt
 
+from math_engine.ETF_bucket import get_optimized_etf_bucket
+
 
 RESULTS_PATH = Path(__file__).resolve().parent / "etf_output_files"
 
 
-def return_optimized_etf(ml_inputs: dict, risk_tolerance: str) -> dict:
-    """To be implemented in math_engine/"""
-    pass
+def return_optimized_etf(ml_inputs: dict, risk_tolerance: str, max_single_weight: float | None = None) -> dict:
+    """Screens candidates, predicts return/volatility, and solves for optimized weights. See math_engine/ETF_bucket.py."""
+    return get_optimized_etf_bucket(ml_inputs, risk_tolerance, max_single_weight)
 
 def shape_user_inputs(args: argparse.Namespace) -> dict:
     """Shapes the user inputs for ml ticker collection and inference, and a component in ETF composition function."""
@@ -163,12 +166,13 @@ def main():
     parser.add_argument("--min_pool", type = int, required = True)
     parser.add_argument("--max_pool", type = int, required = True)
     parser.add_argument("--risk_tolerance", type = str, required = True)
+    parser.add_argument("--max_single_weight", type = float, default = None)
 
     args = parser.parse_args()
 
     ml_inputs = shape_user_inputs(args)
 
-    results = return_optimized_etf(ml_inputs, args.risk_tolerance)
+    results = return_optimized_etf(ml_inputs, args.risk_tolerance, args.max_single_weight)
 
     filepath = RESULTS_PATH / f"{args.file_name}.png"
     output_results_file(results, filepath)
