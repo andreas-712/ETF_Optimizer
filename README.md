@@ -28,7 +28,7 @@ source ETF_Opt/bin/activate
 python -m ml_engine.sandbox_ml_models
 ```
 
-For example, enabling `backtesting_inference` prints a three-row summary for the 3, 20, and 90-day models, including mean return directional accuracy and volatility RMSE (given a properly formatted JSON training file). 
+For example, enabling `backtesting_inference` prints a three-row summary for the 3, 20, and 90-day models, including mean return directional accuracy and volatility RMSE (given a properly formatted JSON training file). Set `output_file` to `Y` to also save a returns-only report to `ml_engine/test_results/backtest_returns.txt`.
 Enabling `live_inference` screens the configured ticker pool and prints a prediction for each selected ticker.
 
 Live inference requires valid Google Vertex AI authentication and the environment settings in `backend/.flaskenv`.
