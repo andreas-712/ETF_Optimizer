@@ -19,9 +19,6 @@ def _min_variance_weights_closed_form(mu: np.ndarray, Sigma: np.ndarray, target_
     C = mu @ Sigma_inv @ mu
     det = A * C - B**2
     with np.errstate(divide="ignore", invalid="ignore"):
-        # det is ~0 whenever mu lacks spread (e.g. a single asset) -- that's
-        # expected to produce nan/inf here; optimize_weights checks for it
-        # and routes to the constrained solver instead of surfacing it.
         lam1 = (C-B * target_return) / det
         lam2 = (A * target_return - B) / det
     return lam1 * (Sigma_inv @ ones) + lam2 * (Sigma_inv @ mu)
@@ -85,11 +82,7 @@ def optimize_weights(
     """
     w = _min_variance_weights_closed_form(mu, Sigma, target_return)
 
-    # The closed form divides by (A*C - B**2), which is ~0 whenever mu doesn't
-    # have enough spread (e.g. a single asset, or several assets with equal/
-    # near-equal expected returns) -- that produces NaNs or weights that don't
-    # actually sum to 1 / hit target_return, silently, since neither of those
-    # is otherwise checked below. Route those cases to the constrained solver too.
+    
     violates_budget = not np.all(np.isfinite(w)) or not np.isclose(np.sum(w), 1.0, atol=1e-6)
     violates_target = not np.isclose(w @ mu, target_return, atol=1e-6) if np.all(np.isfinite(w)) else True
     violates_long_only = long_only and np.any(w < -1e-8)
@@ -102,5 +95,28 @@ def optimize_weights(
         w = _min_variance_weights_constrained(
             mu, Sigma, target_return, long_only=long_only, max_weight=max_weight, group_caps=group_caps
         )
- 
+
     return w
+
+def risk_contributions(w: np.ndarray, Sigma: np.ndarray) -> np.ndarray:
+    """
+    Decomposes total portfolio volatility into a per-asset marginal contribution,
+    via the standard Euler decomposition: each asset's contribution is
+    (Sigma @ w)_i / portfolio_vol, chosen so that sum(w_i * contribution_i) ==
+    portfolio_vol == sqrt(w @ Sigma @ w) exactly (not an approximation).
+
+    This is what callers should report as "this asset's volatility" when the
+    number needs to roll up linearly to the true portfolio volatility -- a
+    weighted sum of assets' standalone volatilities does NOT equal portfolio
+    volatility except in the degenerate case of perfect correlation.
+
+    Inputs:
+    w: portfolio weights, shape (n,)
+    Sigma: covariance matrix, shape (n, n)
+    Returns:
+    1D array of per-asset marginal risk contributions, shape (n,)
+    """
+    portfolio_vol = float(np.sqrt(w @ Sigma @ w))
+    if portfolio_vol <= 0:
+        return np.zeros_like(w)
+    return (Sigma @ w) / portfolio_vol

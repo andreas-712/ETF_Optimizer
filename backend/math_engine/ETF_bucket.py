@@ -32,7 +32,7 @@ from ml_engine.live_inference import run_live_inference
 from ml_engine.market_data_collection import fetch_numerical_ticker_data
 from ml_engine.exceptions import userInputError
 
-from math_engine.Optimizer import optimize_weights
+from math_engine.Optimizer import optimize_weights, risk_contributions
 from math_engine.Covariance import build_covariance_matrix
 
 RISK_MULTIPLIERS = {
@@ -54,6 +54,11 @@ def get_optimized_etf_bucket(
     then solves for minimum-variance weights hitting a risk-scaled target
     return (math_engine). Returns one record per selected ticker:
     {ticker: {weight, return, volatility, horizon_days, sector, market_cap_category}}
+
+    Note: the returned "volatility" is each ticker's marginal contribution to
+    portfolio volatility (see Optimizer.risk_contributions), not its standalone
+    ml_engine-predicted volatility -- callers summing weight * volatility across
+    holdings get the true portfolio volatility this way.
     """
     if risk_tolerance not in RISK_MULTIPLIERS:
         raise userInputError(
@@ -122,7 +127,10 @@ def get_optimized_etf_bucket(
             group_caps=group_caps or None,
         )
 
+    
+    marginal_risk = risk_contributions(weights, Sigma)
+
     return {
-        ticker: {**predictions[ticker], "weight": weight}
-        for ticker, weight in zip(final_tickers, weights.tolist())
+        ticker: {**predictions[ticker], "weight": weight, "volatility": float(vol)}
+        for ticker, weight, vol in zip(final_tickers, weights.tolist(), marginal_risk.tolist())
     }
