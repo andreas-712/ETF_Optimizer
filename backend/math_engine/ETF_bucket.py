@@ -89,6 +89,16 @@ def get_optimized_etf_bucket(
         raise userInputError("No tickers had enough historical price data to compute covariance")
     predictions = {t: predictions[t] for t in final_tickers}
 
+    if max_single_weight is not None:
+        minimum_feasible_weight = 1 / len(final_tickers)
+        if max_single_weight < minimum_feasible_weight:
+            raise userInputError(
+                "max_single_weight must be at least "
+                f"{minimum_feasible_weight:.6g} to allocate across {len(final_tickers)} tickers"
+            )
+        if max_single_weight > 1:
+            raise userInputError("max_single_weight cannot exceed 1")
+
     mu = np.array([predictions[t]["return"] for t in final_tickers])
     Sigma = build_covariance_matrix(wide_prices, final_tickers, annualize=True)
 

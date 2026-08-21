@@ -24,10 +24,11 @@ YFINANCE_SECTORS = {
     "financial": "Financial Services",
     "technology": "Technology",
 }
-COMPANY_SIZES = {"big-cap", "mid-cap", "small-cap"}
+COMPANY_SIZES = {"mega-cap", "big-cap", "mid-cap", "small-cap"}
 SMALL_CAP_LOW = 300_000_000 # $300 million USD
 SMALL_CAP_HIGH = 2_000_000_000 # $2 billion USD
 BIG_CAP_LOW = 10_000_000_000 # $10 billion USD
+MEGA_CAP_LOW = 100_000_000_000 # $100 billion USD
 MIN_POOL_LOW_BOUND = 10
 MAX_POOL_UPPER_BOUND = 100
 
@@ -200,6 +201,8 @@ def _build_ticker_query(user_inputs: dict, sector: str) -> yf.EquityQuery:
     size_filters = []
     if "big-cap" in sizes:
         size_filters.append(yf.EquityQuery("gte", ["intradaymarketcap", BIG_CAP_LOW]))
+    if "mega-cap" in sizes:
+        size_filters.append(yf.EquityQuery("gte", ["intradaymarketcap", MEGA_CAP_LOW]))
     if "mid-cap" in sizes:
         size_filters.append(yf.EquityQuery("btwn", ["intradaymarketcap", SMALL_CAP_HIGH, BIG_CAP_LOW]))
     if "small-cap" in sizes:
@@ -256,6 +259,8 @@ def _market_cap_category(market_cap: float | None) -> str | None:
         return "small-cap"
     if market_cap < BIG_CAP_LOW:
         return "mid-cap"
+    if market_cap >= MEGA_CAP_LOW:
+        return "mega-cap"
     return "big-cap"
 
 async def get_ticker_pool(user_inputs: dict) -> list:

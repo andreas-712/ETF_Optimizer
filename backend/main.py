@@ -28,10 +28,6 @@ from math_engine.ETF_bucket import get_optimized_etf_bucket
 RESULTS_PATH = Path(__file__).resolve().parent / "etf_output_files"
 
 
-def return_optimized_etf(ml_inputs: dict, risk_tolerance: str, max_single_weight: float | None = None) -> dict:
-    """Screens candidates, predicts return/volatility, and solves for optimized weights. See math_engine/ETF_bucket.py."""
-    return get_optimized_etf_bucket(ml_inputs, risk_tolerance, max_single_weight)
-
 def shape_user_inputs(args: argparse.Namespace) -> dict:
     """Shapes the user inputs for ml ticker collection and inference, and a component in ETF composition function."""
     live_inference_inputs = {}
@@ -172,7 +168,11 @@ def main():
 
     ml_inputs = shape_user_inputs(args)
 
-    results = return_optimized_etf(ml_inputs, args.risk_tolerance, args.max_single_weight)
+    results = get_optimized_etf_bucket(ml_inputs, args.risk_tolerance, args.max_single_weight)
 
     filepath = RESULTS_PATH / f"{args.file_name}.png"
     output_results_file(results, filepath)
+    print(f"File saved to {filepath}")
+
+if __name__ == "__main__":
+    main()
